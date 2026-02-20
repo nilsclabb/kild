@@ -1,0 +1,121 @@
+/* ============================================================
+ * KILD Tauri — Global Styles
+ * Design system inspired by the "Tallinn Night" theme
+ * ============================================================ */
+
+:root {
+  /* ---- Surfaces (dark to light) ---- */
+  --void: #08090a;
+  --obsidian: #0e1012;
+  --surface: #151719;
+  --elevated: #1c1f22;
+
+  /* ---- Borders ---- */
+  --border-subtle: #1f2328;
+  --border: #2d3139;
+  --border-strong: #3d434d;
+
+  /* ---- Text ---- */
+  --text-muted: #5c6370;
+  --text-subtle: #848d9c;
+  --text: #b8c0cc;
+  --text-bright: #e8ecf0;
+  --text-white: #f8fafc;
+
+  /* ---- Accent ---- */
+  --ice: #7cb4c8;
+  --ice-dim: #5e9ab2;
+  --ice-bright: #98cce0;
+
+  /* ---- Status ---- */
+  --aurora: #6b8f5e;
+  --aurora-dim: #556f4a;
+  --copper: #c49a5c;
+  --copper-dim: #a07d45;
+  --ember: #b87060;
+  --ember-dim: #9a584a;
+
+  /* ---- Agent ---- */
+  --kiri: #a088b0;
+
+  /* ---- Spacing ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* ---- Typography ---- */
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+
+  /* ---- Radii ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  color: var(--text);
+  background-color: var(--void);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Selection */
+::selection {
+  background: var(--ice-dim);
+  color: var(--text-white);
+}
+
+/* Focus outline */
+:focus-visible {
+  outline: 1px solid var(--ice);
+  outline-offset: -1px;
+}
+
+/* Button reset */
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}

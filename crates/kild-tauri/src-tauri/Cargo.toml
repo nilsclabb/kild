@@ -1,0 +1,22 @@
+[package]
+name = "kild-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cross-platform Tauri GUI for KILD"
+
+[[bin]]
+name = "kild-tauri"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+kild-core = { workspace = true }
+kild-config = { workspace = true }
+git2 = { workspace = true }
+tracing = { workspace = true }

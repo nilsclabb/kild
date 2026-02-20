@@ -17,3 +17,8 @@ build/
 .claude/skills/archon/
 ROADMAP-DISCUSSION.md
 ISSUE_DEPENDENCY_MAP.md
+
+
+# Tauri
+
+crates/kild-tauri/node_modules
