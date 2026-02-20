@@ -16,7 +16,7 @@ export function Sidebar({ sessions, selectedBranch, onSelect, onCreateNew, loadi
     return (
         <aside className="sidebar">
             <div className="sidebar-header">
-                <h1 className="sidebar-title">KILD</h1>
+                <span className="sidebar-label">Sessions</span>
                 <button className="btn-create" onClick={onCreateNew} title="Create new kild">
                     +
                 </button>

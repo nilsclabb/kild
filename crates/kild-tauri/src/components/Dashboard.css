@@ -109,7 +109,7 @@
 
 /* Detail view */
 .detail-view {
-    max-width: 640px;
+    width: 100%;
 }
 
 .detail-header {
@@ -229,4 +229,40 @@
 
 .btn-danger:hover {
     background-color: var(--ember);
+}
+
+/* Terminal button */
+.btn-terminal {
+    background-color: var(--ice-dim);
+    color: var(--text-white);
+}
+
+.btn-terminal:hover {
+    background-color: var(--ice);
+}
+
+.btn-sm {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+}
+
+/* Terminal wrapper in detail view */
+.terminal-wrapper {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 120px);
+    gap: var(--space-2);
+}
+
+.terminal-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-1) 0;
+}
+
+.terminal-label {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
 }
