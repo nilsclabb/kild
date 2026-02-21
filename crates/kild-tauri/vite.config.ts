@@ -21,5 +21,12 @@ export default defineConfig({
         minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
         // produce sourcemaps for debug builds
         sourcemap: !!process.env.TAURI_ENV_DEBUG,
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    xterm: ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-webgl"],
+                },
+            },
+        },
     },
 });

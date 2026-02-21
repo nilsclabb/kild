@@ -5,7 +5,9 @@ import { Sidebar } from "./components/Sidebar";
 import { Dashboard } from "./components/Dashboard";
 import { CreateDialog } from "./components/CreateDialog";
 import { Terminal } from "./components/Terminal";
-import type { SessionInfo } from "./types";
+import { ToastContainer } from "./components/Toast";
+import { SettingsDialog } from "./components/SettingsDialog";
+import type { SessionInfo, ToastMessage, UserSettings } from "./types";
 import "./styles/App.css";
 
 interface ActiveTerminal {
@@ -20,10 +22,43 @@ function App() {
     const [sessions, setSessions] = useState<SessionInfo[]>([]);
     const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
     const [showCreateDialog, setShowCreateDialog] = useState(false);
+    const [showSettingsDialog, setShowSettingsDialog] = useState(false);
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"detail" | "grid">("detail");
     const [activeTerminals, setActiveTerminals] = useState<Map<string, ActiveTerminal>>(new Map());
     const [visibleTerminalBranch, setVisibleTerminalBranch] = useState<string | null>(null);
+    const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+    const addToast = useCallback((title: string, message: string, type: "success" | "error" | "info" = "info") => {
+        const id = Math.random().toString(36).substring(2, 9);
+        setToasts((prev) => [...prev, { id, title, message, type }]);
+    }, []);
+
+    const removeToast = useCallback((id: string) => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, []);
+
+    // Theme state: defaults to dark
+    const [theme, setTheme] = useState<"dark" | "light">(() => {
+        return (localStorage.getItem("kild-theme") as "dark" | "light") || "dark";
+    });
+
+    // Settings state
+    const [userSettings, setUserSettings] = useState<UserSettings>(() => {
+        const stored = localStorage.getItem("kild-settings");
+        if (stored) {
+            try {
+                return JSON.parse(stored) as UserSettings;
+            } catch (e) {
+                console.error("Failed to parse settings", e);
+            }
+        }
+        return {
+            shell: "zsh",
+            fontSize: 14,
+            defaultAgent: "kild"
+        };
+    });
 
     // Grid focus: when set, one terminal fills the grid
     const [focusedBranch, setFocusedBranch] = useState<string | null>(null);
@@ -81,6 +116,19 @@ function App() {
         return () => clearInterval(interval);
     }, [autoConnectSessions]);
 
+    // Apply theme to HTML tag
+    useEffect(() => {
+        const html = document.documentElement;
+        if (theme === "light") {
+            html.classList.add("theme-light");
+        } else {
+            html.classList.remove("theme-light");
+        }
+        localStorage.setItem("kild-theme", theme);
+    }, [theme]);
+
+    const toggleTheme = () => setTheme(prev => prev === "dark" ? "light" : "dark");
+
     const addTerminal = useCallback(async (session: SessionInfo): Promise<void> => {
         try {
             const cmd = await invoke<string>("get_agent_command", { agent: session.agent });
@@ -99,17 +147,18 @@ function App() {
         }
     }, []);
 
-    const handleCreateKild = async (branch: string, agent: string) => {
+    const handleCreateKild = async (branch: string, agent: string, runtime: string = "docker") => {
         try {
-            const session = await invoke<SessionInfo>("create_session", { branch, agent });
+            const session = await invoke<SessionInfo>("create_session", { branch, agent, runtime_mode: runtime, focus: false });
             setShowCreateDialog(false);
             await refreshSessions();
             setSelectedBranch(session.branch);
             await addTerminal(session);
             setVisibleTerminalBranch(session.branch);
-        } catch (err) {
+            addToast("Session Created", `Successfully started kild for ${branch}`, "success");
+        } catch (err: any) {
             console.error("Failed to create session:", err);
-            alert(`Failed to create kild: ${err}`);
+            addToast("Creation Failed", err.toString(), "error");
         }
     };
 
@@ -143,8 +192,15 @@ function App() {
     };
 
     const handleStopKild = async (branch: string) => {
-        try { await killTerminal(branch); await invoke("stop_session", { branch }); await refreshSessions(); }
-        catch (err) { console.error("Failed to stop:", err); }
+        try {
+            await killTerminal(branch);
+            await invoke("stop_session", { branch });
+            await refreshSessions();
+            addToast("Session Stopped", `Agent for ${branch} has been stopped`, "info");
+        } catch (err: any) {
+            console.error("Failed to stop:", err);
+            addToast("Stop Failed", err.toString(), "error");
+        }
     };
 
     const handleDestroyKild = async (branch: string) => {
@@ -155,7 +211,11 @@ function App() {
             setSelectedBranch(null);
             await invoke("destroy_session", { branch, force: false });
             await refreshSessions();
-        } catch (err) { console.error("Failed to destroy:", err); }
+            addToast("Session Destroyed", `Worktree for ${branch} was deleted`, "info");
+        } catch (err: any) {
+            console.error("Failed to destroy:", err);
+            addToast("Destroy Failed", err.toString(), "error");
+        }
     };
 
     const terminalEntries = Array.from(activeTerminals.entries());
@@ -171,11 +231,12 @@ function App() {
                     : 9;
 
     return (
-        <div className="app">
+        <div className="app" data-tauri-drag-region>
             <Header
                 viewMode={viewMode}
                 onViewModeChange={(m) => { setViewMode(m); setFocusedBranch(null); }}
                 activeTerminalCount={activeTerminals.size}
+                onOpenSettings={() => setShowSettingsDialog(true)}
             />
 
             <div className="app-body">
@@ -189,6 +250,8 @@ function App() {
                         }}
                         onCreateNew={() => setShowCreateDialog(true)}
                         loading={loading}
+                        theme={theme}
+                        onToggleTheme={toggleTheme}
                     />
                 )}
 
@@ -224,7 +287,7 @@ function App() {
                                         command={term.command}
                                         args={[]}
                                         cwd={term.cwd}
-                                        fontSize={13}
+                                        fontSize={userSettings.fontSize}
                                         onExit={() => handleTerminalExit(branch)}
                                     />
                                 </div>
@@ -236,15 +299,20 @@ function App() {
                     {viewMode === "grid" && (
                         <>
                             {terminalEntries.length === 0 ? (
-                                <div className="grid-empty">
-                                    <div className="empty-icon">⚡</div>
-                                    <h2>No active terminals</h2>
-                                    <p>Create a kild to get started.</p>
-                                    <button className="btn btn-terminal" onClick={() => {
-                                        setViewMode("detail"); setShowCreateDialog(true);
-                                    }}>
-                                        + Create Kild
-                                    </button>
+                                <div className="empty-state-wrapper">
+                                    <div className="empty-state-card">
+                                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="empty-icon-svg">
+                                            <polyline points="4 17 10 11 4 5"></polyline>
+                                            <line x1="12" y1="19" x2="20" y2="19"></line>
+                                        </svg>
+                                        <h2>No active terminals</h2>
+                                        <p>Create a kild to get started.</p>
+                                        <button className="btn btn-primary" onClick={() => {
+                                            setViewMode("detail"); setShowCreateDialog(true);
+                                        }}>
+                                            + Create Kild
+                                        </button>
+                                    </div>
                                 </div>
                             ) : focusedBranch ? (
                                 /* Focused: single terminal fills the grid */
@@ -270,7 +338,7 @@ function App() {
                                                     command={term.command}
                                                     args={[]}
                                                     cwd={term.cwd}
-                                                    fontSize={13}
+                                                    fontSize={userSettings.fontSize}
                                                     onExit={() => handleTerminalExit(focusedBranch)}
                                                 />
                                             </div>
@@ -323,9 +391,23 @@ function App() {
                 </main>
             </div>
 
+            <ToastContainer toasts={toasts} onDismiss={removeToast} />
+
+            {showSettingsDialog && (
+                <SettingsDialog
+                    initialSettings={userSettings}
+                    onClose={() => setShowSettingsDialog(false)}
+                    onSave={(settings) => {
+                        setUserSettings(settings);
+                        localStorage.setItem("kild-settings", JSON.stringify(settings));
+                        addToast("Settings Saved", "Your preferences have been updated.", "success");
+                    }}
+                />
+            )}
+
             {showCreateDialog && (
                 <CreateDialog
-                    onSubmit={handleCreateKild}
+                    onSubmit={(branch, agent, runtime) => handleCreateKild(branch, agent, runtime)}
                     onClose={() => setShowCreateDialog(false)}
                 />
             )}

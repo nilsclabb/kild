@@ -103,7 +103,7 @@ pub fn create_session(branch: String, agent: String) -> Result<SessionInfo, Stri
     let kild_config = kild_config::KildConfig::load_hierarchy().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     // 1. Resolve agent command
-    let agent_command = kild_config
+    let _agent_command = kild_config
         .get_agent_command(&agent)
         .map_err(|e| format!("Unknown agent '{}': {}", agent, e))?;
 

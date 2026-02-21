@@ -1,68 +1,64 @@
 .app-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    height: 48px;
-    padding: 0 var(--space-4);
-    background: var(--void);
+    justify-content: center;
+    height: 52px;
+    padding: 0 var(--space-5);
+    background: transparent;
     border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
-    -webkit-app-region: drag;
-    /* Makes header draggable in Tauri */
 }
 
 .header-left,
-.header-right {
-    width: 80px;
-}
-
+.header-right,
 .header-title {
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 2px;
-    color: var(--text-primary);
-    margin: 0;
+    display: none;
 }
 
 .header-center {
     display: flex;
     align-items: center;
-    -webkit-app-region: no-drag;
 }
 
+/* View toggle — liquid glass pill */
 .view-toggle {
     display: flex;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 8px;
+    background: var(--lg-bg);
+    border-radius: var(--radius-pill);
     padding: 3px;
     gap: 2px;
+    box-shadow: var(--lg-ring), var(--lg-specular);
+    backdrop-filter: var(--lg-blur);
+    -webkit-backdrop-filter: var(--lg-blur);
 }
 
 .toggle-btn {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 5px 12px;
+    padding: 6px 16px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-pill);
     background: transparent;
     color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 500;
+    font-size: var(--type-subhead-size);
+    font-weight: var(--type-subhead-weight);
+    letter-spacing: var(--type-subhead-tracking);
+    line-height: var(--type-subhead-height);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all 0.25s ease;
     white-space: nowrap;
 }
 
 .toggle-btn:hover {
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--lg-bg);
 }
 
 .toggle-btn.active {
     color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.08);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    background: var(--lg-bg-active);
+    box-shadow: var(--lg-ring), var(--lg-specular);
 }
 
 .toggle-btn svg {
@@ -75,10 +71,10 @@
     justify-content: center;
     min-width: 18px;
     height: 18px;
-    padding: 0 5px;
-    border-radius: 9px;
-    background: var(--accent);
-    color: #fff;
+    padding: 0 6px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-dim);
+    color: var(--accent);
     font-size: 10px;
     font-weight: 700;
 }

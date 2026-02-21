@@ -1,42 +1,78 @@
 /* ============================================================
- * KILD Tauri — Global Styles
- * Design system inspired by the "Tallinn Night" theme
+ * KILD — Liquid Glass Design System (Dark Theme)
+ * Inspired by Apple Liquid Glass / iOS 26 / macOS Tahoe
+ *
+ * Glass technique: SVG feDisplacementMap for distortion,
+ * backdrop-filter blur, specular ring highlights,
+ * rgba white tints on dark backgrounds.
  * ============================================================ */
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 :root {
-  /* ---- Surfaces (dark to light) ---- */
-  --void: #08090a;
-  --obsidian: #0e1012;
-  --surface: #151719;
-  --elevated: #1c1f22;
+  /* ---- Dark surfaces (macOS Vibrancy Tuning) ---- */
+  /*
+     ✨ HOW TO TUNE TRANSLUCENCY ✨
+     Lower the alpha value (the 4th number, e.g. 0.85) to make the app MORE transparent,
+     letting the native macOS desktop blur shine through.
+     Raise it (max 1.0) to make the app MORE opaque and darker.
+  */
+
+  /* Main background (App.css body) */
+  --void: rgba(0, 0, 0, 0.15);
+
+  /* Sidebar background - sits above main background conceptually */
+  --surface: rgba(0, 0, 0, 0.20);
+
+  /* Inner elements (Dashboard, Grid Cells) */
+  --card: rgba(0, 0, 0, 0.35);
+  /* Main Content */
+  --elevated: rgba(20, 20, 22, 0.9);
+  --active: rgba(35, 35, 38, 0.9);
+
+  /* ---- Liquid Glass system (subtle Apple dark mode) ---- */
+  --lg-bg: rgba(255, 255, 255, 0.04);
+  --lg-bg-hover: rgba(255, 255, 255, 0.08);
+  --lg-bg-active: rgba(255, 255, 255, 0.12);
+  --lg-ring: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  --lg-ring-hover: 0 0 0 1.5px rgba(255, 255, 255, 0.20);
+  --lg-specular: inset 1px 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 0 8px rgba(255, 255, 255, 0.02);
+  --lg-specular-hover: inset 1px 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 10px rgba(255, 255, 255, 0.05);
+  --lg-blur: blur(24px);
+  --lg-blur-strong: blur(48px);
 
   /* ---- Borders ---- */
-  --border-subtle: #1f2328;
-  --border: #2d3139;
-  --border-strong: #3d434d;
-
-  /* ---- Text ---- */
-  --text-muted: #5c6370;
-  --text-subtle: #848d9c;
-  --text: #b8c0cc;
-  --text-bright: #e8ecf0;
-  --text-white: #f8fafc;
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.12);
 
   /* ---- Accent ---- */
-  --ice: #7cb4c8;
-  --ice-dim: #5e9ab2;
-  --ice-bright: #98cce0;
+  --accent: #FF7B42;
+  /* Slightly softer orange for dark mode contrast */
+  --accent-dim: rgba(255, 123, 66, 0.15);
+  --accent-glow: rgba(255, 123, 66, 0.25);
+  --accent-hover: #FF8F5C;
+  --accent-ring: 0 0 0 1.5px rgba(255, 123, 66, 0.4);
+
+  /* ---- Cyan ---- */
+  --cyan: #64D2FF;
 
   /* ---- Status ---- */
-  --aurora: #6b8f5e;
-  --aurora-dim: #556f4a;
-  --copper: #c49a5c;
-  --copper-dim: #a07d45;
-  --ember: #b87060;
-  --ember-dim: #9a584a;
+  --status-running: #30D158;
+  --status-running-dim: rgba(48, 209, 88, 0.15);
+  --status-running-glow: rgba(48, 209, 88, 0.35);
+  --status-stopped: #FF453A;
+  --status-stopped-dim: rgba(255, 69, 58, 0.12);
+  --status-pending: #FFD60A;
+  --status-pending-dim: rgba(255, 214, 10, 0.12);
 
-  /* ---- Agent ---- */
-  --kiri: #a088b0;
+  /* ---- Text Base Colors ---- */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(235, 235, 245, 0.6);
+  --text-muted: rgba(235, 235, 245, 0.45);
+  --text-dim: rgba(235, 235, 245, 0.3);
 
   /* ---- Spacing ---- */
   --space-1: 4px;
@@ -45,21 +81,212 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --space-8: 32px;
 
-  /* ---- Typography ---- */
-  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 18px;
+  /* ---- Apple HIG Typography System ---- */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+
+  /* SF Pro Tracking & Sizing */
+  --type-large-title-size: 34px;
+  --type-large-title-weight: 400;
+  --type-large-title-tracking: 0.37px;
+  --type-large-title-height: 41px;
+  --type-title1-size: 28px;
+  --type-title1-weight: 400;
+  --type-title1-tracking: 0.36px;
+  --type-title1-height: 34px;
+  --type-title2-size: 22px;
+  --type-title2-weight: 400;
+  --type-title2-tracking: 0.35px;
+  --type-title2-height: 28px;
+  --type-title3-size: 20px;
+  --type-title3-weight: 400;
+  --type-title3-tracking: 0.38px;
+  --type-title3-height: 25px;
+
+  --type-headline-size: 17px;
+  --type-headline-weight: 600;
+  --type-headline-tracking: -0.41px;
+  --type-headline-height: 22px;
+  --type-body-size: 17px;
+  --type-body-weight: 400;
+  --type-body-tracking: -0.41px;
+  --type-body-height: 22px;
+  --type-callout-size: 16px;
+  --type-callout-weight: 400;
+  --type-callout-tracking: -0.32px;
+  --type-callout-height: 21px;
+  --type-subhead-size: 15px;
+  --type-subhead-weight: 400;
+  --type-subhead-tracking: -0.24px;
+  --type-subhead-height: 20px;
+  --type-footnote-size: 13px;
+  --type-footnote-weight: 400;
+  --type-footnote-tracking: -0.08px;
+  --type-footnote-height: 18px;
+  --type-caption1-size: 12px;
+  --type-caption1-weight: 400;
+  --type-caption1-tracking: 0.00px;
+  --type-caption1-height: 16px;
+  --type-caption2-size: 11px;
+  --type-caption2-weight: 400;
+  --type-caption2-tracking: 0.06px;
+  --type-caption2-height: 13px;
 
   /* ---- Radii ---- */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 100px;
+
+  /* ---- Shadows ---- */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 24px rgba(255, 107, 43, 0.2);
+
+  /* ---- Transitions ---- */
+  --transition-smooth: all 0.2s ease;
+  --transition-bounce: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* ============================================================
+ * LIGHT THEME OVERRIDES
+ * ============================================================ */
+html.theme-light {
+  /* Surfaces */
+  --void: rgba(255, 255, 255, 0.7);
+  --surface: rgba(255, 255, 255, 0.6);
+  --card: rgba(255, 255, 255, 0.85);
+  --elevated: rgba(255, 255, 255, 0.95);
+  --active: rgba(240, 240, 245, 0.9);
+
+  /* Liquid Glass (Dark tints on light background) */
+  --lg-bg: rgba(0, 0, 0, 0.03);
+  --lg-bg-hover: rgba(0, 0, 0, 0.06);
+  --lg-bg-active: rgba(0, 0, 0, 0.09);
+  --lg-ring: 0 0 0 1px rgba(0, 0, 0, 0.1);
+  --lg-ring-hover: 0 0 0 1.5px rgba(0, 0, 0, 0.15);
+  --lg-specular: inset 1px 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 0 8px rgba(0, 0, 0, 0.02);
+  --lg-specular-hover: inset 1px 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 0 10px rgba(0, 0, 0, 0.04);
+
+  /* Borders */
+  --border-subtle: rgba(0, 0, 0, 0.05);
+  --border: rgba(0, 0, 0, 0.10);
+  --border-strong: rgba(0, 0, 0, 0.15);
+
+  /* Status (Deeper contrast for white bg) */
+  --status-running: #24A143;
+  --status-running-dim: rgba(36, 161, 67, 0.12);
+  --status-running-glow: rgba(36, 161, 67, 0.2);
+  --status-stopped: #D9342B;
+  --status-pending: #E09F00;
+
+  /* Text — Deeper, sharper greys for light mode */
+  --text-primary: rgba(0, 0, 0, 0.9);
+  --text-secondary: rgba(60, 60, 67, 0.75);
+  --text-muted: rgba(60, 60, 67, 0.6);
+  --text-dim: rgba(60, 60, 67, 0.45);
+
+  /* Shadows (Softer on light mode) */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.12);
+}
+
+/* ============================================================
+ * TYPOGRAPHY UTILITIES (HIG)
+ * ============================================================ */
+.type-large-title {
+  font-family: var(--font-ui);
+  font-size: var(--type-large-title-size);
+  font-weight: var(--type-large-title-weight);
+  letter-spacing: var(--type-large-title-tracking);
+  line-height: var(--type-large-title-height);
+}
+
+.type-title1 {
+  font-family: var(--font-ui);
+  font-size: var(--type-title1-size);
+  font-weight: var(--type-title1-weight);
+  letter-spacing: var(--type-title1-tracking);
+  line-height: var(--type-title1-height);
+}
+
+.type-title2 {
+  font-family: var(--font-ui);
+  font-size: var(--type-title2-size);
+  font-weight: var(--type-title2-weight);
+  letter-spacing: var(--type-title2-tracking);
+  line-height: var(--type-title2-height);
+}
+
+.type-title3 {
+  font-family: var(--font-ui);
+  font-size: var(--type-title3-size);
+  font-weight: var(--type-title3-weight);
+  letter-spacing: var(--type-title3-tracking);
+  line-height: var(--type-title3-height);
+}
+
+.type-headline {
+  font-family: var(--font-ui);
+  font-size: var(--type-headline-size);
+  font-weight: var(--type-headline-weight);
+  letter-spacing: var(--type-headline-tracking);
+  line-height: var(--type-headline-height);
+}
+
+.type-body {
+  font-family: var(--font-ui);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  letter-spacing: var(--type-body-tracking);
+  line-height: var(--type-body-height);
+}
+
+.type-callout {
+  font-family: var(--font-ui);
+  font-size: var(--type-callout-size);
+  font-weight: var(--type-callout-weight);
+  letter-spacing: var(--type-callout-tracking);
+  line-height: var(--type-callout-height);
+}
+
+.type-subhead {
+  font-family: var(--font-ui);
+  font-size: var(--type-subhead-size);
+  font-weight: var(--type-subhead-weight);
+  letter-spacing: var(--type-subhead-tracking);
+  line-height: var(--type-subhead-height);
+}
+
+.type-footnote {
+  font-family: var(--font-ui);
+  font-size: var(--type-footnote-size);
+  font-weight: var(--type-footnote-weight);
+  letter-spacing: var(--type-footnote-tracking);
+  line-height: var(--type-footnote-height);
+}
+
+.type-caption1 {
+  font-family: var(--font-ui);
+  font-size: var(--type-caption1-size);
+  font-weight: var(--type-caption1-weight);
+  letter-spacing: var(--type-caption1-tracking);
+  line-height: var(--type-caption1-height);
+}
+
+.type-caption2 {
+  font-family: var(--font-ui);
+  font-size: var(--type-caption2-size);
+  font-weight: var(--type-caption2-weight);
+  letter-spacing: var(--type-caption2-tracking);
+  line-height: var(--type-caption2-height);
 }
 
 * {
@@ -68,49 +295,56 @@
   box-sizing: border-box;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   width: 100%;
   overflow: hidden;
+  background: transparent;
 }
 
 body {
   font-family: var(--font-ui);
-  font-size: var(--text-base);
-  color: var(--text);
-  background-color: var(--void);
+  /* Default to Body HIG */
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  letter-spacing: var(--type-body-tracking);
+  line-height: var(--type-body-height);
+  color: var(--text-secondary);
+  background: transparent;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar styling */
+/* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: rgba(128, 128, 128, 0.2);
   border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-strong);
+  background: rgba(255, 255, 255, 0.14);
 }
 
-/* Selection */
 ::selection {
-  background: var(--ice-dim);
-  color: var(--text-white);
+  background: var(--accent-glow);
+  color: var(--text-primary);
 }
 
-/* Focus outline */
 :focus-visible {
-  outline: 1px solid var(--ice);
-  outline-offset: -1px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-/* Button reset */
 button {
   font-family: inherit;
   font-size: inherit;
@@ -118,4 +352,52 @@ button {
   border: none;
   background: none;
   color: inherit;
+}
+
+/* ============================================================
+ * LIQUID GLASS — Reusable component classes
+ *
+ * .glass          — Standard glass element: blur + specular + ring
+ * .glass--strong  — Stronger glass (brighter, more visible)
+ * .glass--pill    — Fully rounded glass
+ * .glass--accent  — Glass with orange accent ring
+ * ============================================================ */
+
+.glass {
+  position: relative;
+  background: var(--lg-bg);
+  border: none;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--lg-ring), var(--lg-specular), var(--shadow-sm);
+  backdrop-filter: var(--lg-blur);
+  -webkit-backdrop-filter: var(--lg-blur);
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.glass:hover {
+  background: var(--lg-bg-hover);
+  box-shadow: var(--lg-ring-hover), var(--lg-specular-hover), var(--shadow-md);
+}
+
+.glass--strong {
+  background: var(--lg-bg-hover);
+  box-shadow: var(--lg-ring-hover), var(--lg-specular-hover), var(--shadow-md);
+}
+
+.glass--pill {
+  border-radius: var(--radius-pill);
+}
+
+.glass--accent {
+  box-shadow: var(--accent-ring), var(--lg-specular), var(--shadow-sm);
+}
+
+.glass--accent:hover {
+  box-shadow: var(--accent-ring), var(--lg-specular-hover), var(--shadow-md), var(--shadow-glow);
+}
+
+/* Glass with SVG distortion filter (for special elements) */
+.glass--distortion {
+  backdrop-filter: url(#glass-distortion) var(--lg-blur);
+  -webkit-backdrop-filter: url(#glass-distortion) var(--lg-blur);
 }

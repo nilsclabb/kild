@@ -1,7 +1,9 @@
 .dialog-overlay {
     position: fixed;
     inset: 0;
-    background-color: rgba(8, 9, 10, 0.8);
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -19,32 +21,52 @@
     }
 }
 
+/* Dialog — liquid glass panel */
 .dialog {
-    background-color: var(--elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
+    background: var(--lg-bg-hover);
+    border: none;
+    border-radius: var(--radius-xl);
     padding: var(--space-6);
     width: 400px;
     max-width: 90vw;
-    animation: slideUp 0.2s ease;
+    animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-shadow: var(--lg-ring-hover), var(--lg-specular), var(--shadow-lg);
+    backdrop-filter: var(--lg-blur-strong);
+    -webkit-backdrop-filter: var(--lg-blur-strong);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Top specular highlight */
+.dialog::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 10%;
+    right: 10%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.25), transparent);
+    pointer-events: none;
 }
 
 @keyframes slideUp {
     from {
-        transform: translateY(8px);
+        transform: translateY(16px) scale(0.96);
         opacity: 0;
     }
 
     to {
-        transform: translateY(0);
+        transform: translateY(0) scale(1);
         opacity: 1;
     }
 }
 
 .dialog-title {
-    font-size: var(--text-lg);
-    color: var(--text-white);
-    font-weight: 600;
+    font-size: var(--type-title3-size);
+    font-weight: var(--type-title3-weight);
+    letter-spacing: var(--type-title3-tracking);
+    line-height: var(--type-title3-height);
+    color: var(--text-primary);
     margin-bottom: var(--space-5);
 }
 
@@ -54,29 +76,34 @@
 
 .form-label {
     display: block;
-    font-size: var(--text-sm);
-    color: var(--text-subtle);
-    margin-bottom: var(--space-1);
+    font-size: var(--type-subhead-size);
     font-weight: 500;
+    letter-spacing: var(--type-subhead-tracking);
+    line-height: var(--type-subhead-height);
+    color: var(--text-secondary);
+    margin-bottom: 6px;
 }
 
 .form-input,
 .form-select {
     width: 100%;
-    padding: var(--space-2) var(--space-3);
-    background-color: var(--surface);
-    border: 1px solid var(--border);
+    padding: 8px var(--space-3);
+    background: rgba(0, 0, 0, 0.35);
+    border: none;
     border-radius: var(--radius-md);
-    color: var(--text-bright);
-    font-size: var(--text-md);
+    color: var(--text-primary);
+    font-size: var(--type-body-size);
+    font-weight: var(--type-body-weight);
+    letter-spacing: var(--type-body-tracking);
     font-family: inherit;
-    transition: border-color 0.15s ease;
+    transition: all 0.2s ease;
+    box-shadow: var(--lg-ring), var(--lg-specular);
 }
 
 .form-input:focus,
 .form-select:focus {
     outline: none;
-    border-color: var(--ice);
+    box-shadow: var(--accent-ring), var(--lg-specular-hover);
 }
 
 .form-input::placeholder {
@@ -86,48 +113,56 @@
 .form-select {
     appearance: none;
     cursor: pointer;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235c6370' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236E6E73' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 12px center;
     padding-right: 32px;
 }
 
 .form-select option {
-    background-color: var(--elevated);
-    color: var(--text-bright);
+    background: var(--elevated);
+    color: var(--text-primary);
 }
 
 .dialog-actions {
     display: flex;
     justify-content: flex-end;
     gap: var(--space-3);
-    margin-top: var(--space-5);
+    margin-top: var(--space-6);
 }
 
 .btn-ghost {
-    padding: var(--space-2) var(--space-4);
+    padding: 6px var(--space-4);
     border-radius: var(--radius-md);
-    font-size: var(--text-sm);
-    color: var(--text-subtle);
-    transition: color 0.15s ease;
+    font-size: var(--type-subhead-size);
+    font-weight: var(--type-subhead-weight);
+    letter-spacing: var(--type-subhead-tracking);
+    line-height: var(--type-subhead-height);
+    color: var(--text-muted);
+    transition: all 0.15s ease;
 }
 
 .btn-ghost:hover {
-    color: var(--text-bright);
+    color: var(--text-primary);
+    background: var(--lg-bg);
 }
 
+/* Primary button — glass with accent ring */
 .btn-primary {
-    padding: var(--space-2) var(--space-4);
+    padding: 6px var(--space-5);
     border-radius: var(--radius-md);
-    font-size: var(--text-sm);
-    font-weight: 500;
-    background-color: var(--ice-dim);
-    color: var(--text-white);
-    transition: background-color 0.15s ease;
+    font-size: var(--type-subhead-size);
+    font-weight: 600;
+    letter-spacing: var(--type-subhead-tracking);
+    background: var(--lg-bg);
+    color: var(--accent);
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-shadow: var(--accent-ring), var(--lg-specular);
 }
 
 .btn-primary:hover:not(:disabled) {
-    background-color: var(--ice);
+    background: var(--lg-bg-hover);
+    box-shadow: var(--accent-ring), var(--lg-specular-hover), var(--shadow-glow);
 }
 
 .btn-primary:disabled {

@@ -4,13 +4,31 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet" />
     <title>KILD</title>
-  <script type="module" crossorigin src="/assets/index-Bs064Tcb.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-Bt_g-GWC.css">
+  <script type="module" crossorigin src="/assets/index-YnS18YFl.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/xterm-DUaaFupY.js">
+  <link rel="stylesheet" crossorigin href="/assets/index-B9f8JygK.css">
 </head>
 
 <body>
     <div id="root"></div>
+
+    <!-- SVG filter for liquid glass distortion / refraction effect -->
+    <svg style="position:absolute;width:0;height:0">
+        <filter id="glass-distortion" primitiveUnits="objectBoundingBox">
+            <feImage
+                href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAACXBIWXMAAAsTAAALEwEAmpwYAAAF0klEQVR4nO2d23LbMAyGk+b9n7m9aJu4tiTy8AMk9d9MJ5NJbIkifgIkJfv6ul6v18v1en3/83//fALA09c/fvz4+uf19fX158+f3/768ccfvwHg6etff/118/ry8vJrA8D1er1ufgoAn77++OOP30/u9Xq93gDg5eXlZgPA9Xq93v7hx48ftwC4Xq/X2z/8+PFjA8CPHz9uf+YfCTx9/fnz588bAP7888/bx8fHz58/f95+5vr16+/r9Xq9XS6XGwB+/fr183K53ADw8+fP29/98ssvN8D48ccfv/4GAHAZ/+Xy9vYGgP/9+HH7GQA//f33328BeH19BcBfv//++w0Af/311w0A//vf/24A+N///ncDwL/+9a8bAP75z38C4OnPf/7z9jMAkAEA/+AyeL1er7cA/PPPP28A+N///ncDwH//+98NAPLff98A8I//+Z8bAJ7+53/+5xaAf//73zcA/O///u8NAP/3v/97A8DTf//3f98C8Pvvv98A8Ouvv94CIL/9dgPA6+vrDQCXywUAf/31FwD++uuvGwBeXl4A8I9//AMAT/Lbbz/fAPDHH3/cAPDy8gKAP//88waAX375BQDfvn27AeD19fUWgH/+858AePrvf/97A8D//d//AeD/mQy+Xq+3APz1118A+POf/7wB4J///OcNAP/617++AwC4Xq83APz5559vAPjPf/5zA8B//vOfGwD+8Y9/3ADwL/lFAN9///0GgP/5n/+5AeAf//jHDQD//ve/bwD4/fffbwD4n//5n+8AQC6X660NADr/8ssvNwD87W9/uwHgt99+uwHg9fUVAE/y228/3wDw559/3gLw22+/3QLw559/AuDp119/BcBffvkFAL/88gsA/vrrLwB4e3u7AeB//ud/bgD4xz/+cQPAr7/+CoDq9EfwU3C9Xm8B+P333wHwv//7vzcA/Pvf/wbA0z/+8Y9bAP71r3/dAPCf//wHAE/y2283APzyyy83APz1118AeH19BcBjkFDffvvtBoCXlxcA/Md//AcAnuRf/7oB4M8//wTA07/+davjBQD//ve/b5/i5eXlBoB//OMfAHh6eXm5AeDXX3+9AeC33367AeC3324A+P33328A+P333wHw73//GwBPf//7328AeHl5uQHg73//+w0AL7/88gsA/vu//xsAL7/9dgvAn3/+CYC/XS4XAPz73/8GwF9//QUAYDI4SijQTMDl8vICAP/9738B8PLycgPAv/71rxsAXl5eAPCPf/wDAE+///77DQC//fYbAP76668bAF5fXwHwKA8Pf/75528A+PPPPwHw559/AuC//+3p88yAQJjqfbJMdGTq0/MQAYj7Rz5+l3ECQE8ACxG4AtBMBJb2FGQHvQeBLiCpUwCQ2gCkBCA1AckAILUBqQFIbkASAhAbgIQAJDcAWRp/OtWTn/rdEyzp+uCuswCsXbPnCcDb2xsA3t/fb9dCgV+v18vlcrlcr9dbAI4AXC4XALy+vgLg8fE//vjjFoB///vft8TvVnC5XADQ6TiE/sCqXgjA5uZm3wB0s4P+LuByCQF4d6sNBTUB8PSo7tRuBD/9fwSgx7WT/0MAgHcDQeeMwInAyuMa4M37rwD0KBZhfXeA5xkW14C1wTr8PNKcjXfPvwKAPQbp//Ynf+7Z/y4Iq/UrAO9x3aP1I/Bf8TN5bAzAz45+JU/k2MNgHdrwNrVHmyAbNKhkJ7C9McmReBJl/9eeq8BFiGJJ3C7CGBxfuDkxyfCYT0BeKevHv+4aO3jVwL6F4vnB0kuz984eFQcevf0KwH9dZ3jnxaA9BKgN/v6zAzA3uf/5f++/XkLwOMAoJVrgHWP/xkAd/qfAJhpJqBvO3jm6bsMgI2B7Ux2CPTM1x/dvQFg7X7kzA4OvEfiGUA7u1+p3/scYO3R6bMSAPqev5b+C4DOBWrm/b8CIGUBAbKJAHiS3nswE4B3+T8A0JsG9Q+A5B4P6Huk0P/9zxbALu0IQK4OlGQpF3By0E0CVjJ0D+Bc6y/m4Pxaj/IG0dq4YR+rGgAAAABJRU5ErkJggg=="
+                x="0" y="0" width="1" height="1" result="map" />
+            <feGaussianBlur in="SourceGraphic" stdDeviation="0.015" result="blur" />
+            <feDisplacementMap in="blur" in2="map" scale="0.8" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+    </svg>
+
 </body>
 
 </html>

@@ -9,3 +9,16 @@ export interface SessionInfo {
     git_dirty: boolean;
     runtime_mode: "terminal" | "daemon";
 }
+
+export interface ToastMessage {
+    id: string;
+    title: string;
+    message: string;
+    type: "success" | "info" | "error";
+}
+
+export interface UserSettings {
+    shell: "zsh" | "bash";
+    fontSize: number;
+    defaultAgent: string;
+}

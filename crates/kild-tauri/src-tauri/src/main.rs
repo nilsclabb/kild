@@ -24,6 +24,18 @@ fn main() {
                 let icon_bytes = include_bytes!("../icons/icon.png");
                 let icon = tauri::image::Image::from_bytes(icon_bytes)?;
                 window.set_icon(icon)?;
+
+                // Apply macOS vibrancy
+                #[cfg(target_os = "macos")]
+                {
+                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                    let _ = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::UnderWindowBackground,
+                        None,
+                        None,
+                    );
+                }
             }
             Ok(())
         })

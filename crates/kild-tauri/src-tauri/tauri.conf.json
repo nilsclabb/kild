@@ -10,6 +10,7 @@
         "beforeBuildCommand": "npm run build"
     },
     "app": {
+        "macOSPrivateApi": true,
         "windows": [
             {
                 "title": "KILD",
@@ -18,7 +19,11 @@
                 "minWidth": 600,
                 "minHeight": 400,
                 "decorations": true,
-                "resizable": true
+                "resizable": true,
+                "titleBarStyle": "Overlay",
+                "hiddenTitle": true,
+                "transparent": true,
+                "theme": "Dark"
             }
         ],
         "security": {
