@@ -19,15 +19,17 @@
   */
 
   /* Main background (App.css body) */
-  --void: rgba(0, 0, 0, 0.15);
+  --void: rgba(5, 5, 5, 0.45);
+  /* #050505 * Tallinn Night */
 
   /* Sidebar background - sits above main background conceptually */
-  --surface: rgba(0, 0, 0, 0.20);
+  --surface: rgba(10, 10, 12, 0.55);
+  /* #0A0A0C */
 
   /* Inner elements (Dashboard, Grid Cells) */
-  --card: rgba(0, 0, 0, 0.35);
+  --card: rgba(10, 10, 12, 0.70);
   /* Main Content */
-  --elevated: rgba(20, 20, 22, 0.9);
+  --elevated: rgba(20, 20, 22, 0.85);
   --active: rgba(35, 35, 38, 0.9);
 
   /* ---- Liquid Glass system (subtle Apple dark mode) ---- */
@@ -48,16 +50,16 @@
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.12);
 
-  /* ---- Accent ---- */
-  --accent: #FF7B42;
-  /* Slightly softer orange for dark mode contrast */
-  --accent-dim: rgba(255, 123, 66, 0.15);
-  --accent-glow: rgba(255, 123, 66, 0.25);
-  --accent-hover: #FF8F5C;
-  --accent-ring: 0 0 0 1.5px rgba(255, 123, 66, 0.4);
+  /* ---- Accent (Tallinn Electric Cornflower) ---- */
+  --accent: #3B82F6;
+  --accent-dim: rgba(59, 130, 246, 0.15);
+  --accent-glow: rgba(59, 130, 246, 0.25);
+  --accent-hover: #60A5FA;
+  --accent-ring: 0 0 0 1.5px rgba(59, 130, 246, 0.4);
 
-  /* ---- Cyan ---- */
-  --cyan: #64D2FF;
+  /* ---- Cyan / Purples ---- */
+  --cyan: #8B5CF6;
+  /* Remap to Agent Purple for agent pills */
 
   /* ---- Status ---- */
   --status-running: #30D158;
@@ -156,46 +158,46 @@
  * LIGHT THEME OVERRIDES
  * ============================================================ */
 html.theme-light {
-  /* Surfaces */
-  --void: rgba(255, 255, 255, 0.7);
-  --surface: rgba(255, 255, 255, 0.6);
-  --card: rgba(255, 255, 255, 0.85);
-  --elevated: rgba(255, 255, 255, 0.95);
-  --active: rgba(240, 240, 245, 0.9);
+  /* Surfaces - More opaque and distinct for contrast */
+  --void: #F2F2F7;
+  --surface: #FFFFFF;
+  --card: #FFFFFF;
+  --elevated: #FFFFFF;
+  --active: #E5E5EA;
 
   /* Liquid Glass (Dark tints on light background) */
-  --lg-bg: rgba(0, 0, 0, 0.03);
-  --lg-bg-hover: rgba(0, 0, 0, 0.06);
-  --lg-bg-active: rgba(0, 0, 0, 0.09);
-  --lg-ring: 0 0 0 1px rgba(0, 0, 0, 0.1);
-  --lg-ring-hover: 0 0 0 1.5px rgba(0, 0, 0, 0.15);
-  --lg-specular: inset 1px 1px 0 rgba(255, 255, 255, 0.5),
-    inset 0 0 8px rgba(0, 0, 0, 0.02);
-  --lg-specular-hover: inset 1px 1px 0 rgba(255, 255, 255, 0.7),
-    inset 0 0 10px rgba(0, 0, 0, 0.04);
+  --lg-bg: rgba(255, 255, 255, 0.7);
+  --lg-bg-hover: rgba(255, 255, 255, 0.9);
+  --lg-bg-active: rgba(255, 255, 255, 1);
+  --lg-ring: 0 0 0 1px rgba(0, 0, 0, 0.15);
+  --lg-ring-hover: 0 0 0 1.5px rgba(0, 0, 0, 0.25);
+  --lg-specular: inset 1px 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 0 8px rgba(0, 0, 0, 0.05);
+  --lg-specular-hover: inset 1px 1px 0 rgba(255, 255, 255, 1),
+    inset 0 0 10px rgba(0, 0, 0, 0.08);
 
-  /* Borders */
-  --border-subtle: rgba(0, 0, 0, 0.05);
-  --border: rgba(0, 0, 0, 0.10);
-  --border-strong: rgba(0, 0, 0, 0.15);
+  /* Borders - Darker for definition */
+  --border-subtle: rgba(0, 0, 0, 0.1);
+  --border: rgba(0, 0, 0, 0.15);
+  --border-strong: rgba(0, 0, 0, 0.25);
 
   /* Status (Deeper contrast for white bg) */
   --status-running: #24A143;
-  --status-running-dim: rgba(36, 161, 67, 0.12);
-  --status-running-glow: rgba(36, 161, 67, 0.2);
+  --status-running-dim: rgba(36, 161, 67, 0.15);
+  --status-running-glow: rgba(36, 161, 67, 0.25);
   --status-stopped: #D9342B;
   --status-pending: #E09F00;
 
   /* Text — Deeper, sharper greys for light mode */
-  --text-primary: rgba(0, 0, 0, 0.9);
-  --text-secondary: rgba(60, 60, 67, 0.75);
-  --text-muted: rgba(60, 60, 67, 0.6);
-  --text-dim: rgba(60, 60, 67, 0.45);
+  --text-primary: rgba(0, 0, 0, 1);
+  --text-secondary: rgba(60, 60, 67, 0.85);
+  --text-muted: rgba(60, 60, 67, 0.7);
+  --text-dim: rgba(60, 60, 67, 0.5);
 
-  /* Shadows (Softer on light mode) */
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.12);
+  /* Shadows (Softer on light mode, but enough definition) */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 8px 16px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 16px 32px rgba(0, 0, 0, 0.15);
 }
 
 /* ============================================================

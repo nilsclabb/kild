@@ -45,7 +45,7 @@ pub struct WorktreeInfo {
     pub project_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProjectInfo {
     pub id: String,
     pub name: String,

@@ -23,15 +23,6 @@
     pointer-events: auto;
     min-width: 300px;
     max-width: 400px;
-    transition: var(--transition-bounce);
-}
-
-.toast-enter {
-    animation: toastSlideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-}
-
-.toast-exit {
-    animation: toastFadeOut 0.3s ease forwards;
 }
 
 .toast-icon {
@@ -98,28 +89,4 @@
 .toast-close:hover {
     color: var(--text-primary);
     background: rgba(255, 255, 255, 0.1);
-}
-
-@keyframes toastSlideUp {
-    0% {
-        opacity: 0;
-        transform: translateY(20px) scale(0.95);
-    }
-
-    100% {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
-}
-
-@keyframes toastFadeOut {
-    0% {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
-
-    100% {
-        opacity: 0;
-        transform: translateY(10px) scale(0.95);
-    }
 }

@@ -23,3 +23,114 @@
     background-color: rgba(255, 255, 255, 0.10);
     border-radius: 3px;
 }
+
+/* Prompt Overlay */
+.terminal-prompt-overlay {
+    position: absolute;
+    bottom: var(--space-4);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 500px;
+    z-index: 50;
+    pointer-events: auto;
+    animation: prompt-slide-up 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes prompt-slide-up {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+}
+
+.terminal-prompt-glass {
+    padding: var(--space-3) var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.prompt-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--font-ui);
+    font-size: var(--type-subhead-size);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.prompt-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.prompt-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    padding-right: 120px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--type-body-size);
+    outline: none;
+    transition: var(--transition-smooth);
+}
+
+.prompt-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.prompt-hint {
+    position: absolute;
+    right: var(--space-2);
+    font-family: var(--font-ui);
+    font-size: var(--type-caption1-size);
+    color: var(--text-muted);
+    background: var(--lg-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+}
+
+/* Reusable Status Dots */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.status-pending {
+    background: var(--status-pending);
+    box-shadow: 0 0 8px var(--status-pending-dim);
+    animation: pulse-yellow 2s infinite ease-in-out;
+}
+
+@keyframes pulse-yellow {
+    0% {
+        opacity: 0.6;
+        box-shadow: 0 0 0 0 rgba(255, 214, 10, 0.4);
+    }
+
+    50% {
+        opacity: 1;
+        box-shadow: 0 0 0 4px rgba(255, 214, 10, 0);
+    }
+
+    100% {
+        opacity: 0.6;
+        box-shadow: 0 0 0 0 rgba(255, 214, 10, 0);
+    }
+}

@@ -8,17 +8,6 @@
     align-items: center;
     justify-content: center;
     z-index: 100;
-    animation: fadeIn 0.15s ease;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-
-    to {
-        opacity: 1;
-    }
 }
 
 /* Dialog — liquid glass panel */
@@ -29,7 +18,6 @@
     padding: var(--space-6);
     width: 400px;
     max-width: 90vw;
-    animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     box-shadow: var(--lg-ring-hover), var(--lg-specular), var(--shadow-lg);
     backdrop-filter: var(--lg-blur-strong);
     -webkit-backdrop-filter: var(--lg-blur-strong);
@@ -47,18 +35,6 @@
     height: 1px;
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.25), transparent);
     pointer-events: none;
-}
-
-@keyframes slideUp {
-    from {
-        transform: translateY(16px) scale(0.96);
-        opacity: 0;
-    }
-
-    to {
-        transform: translateY(0) scale(1);
-        opacity: 1;
-    }
 }
 
 .dialog-title {

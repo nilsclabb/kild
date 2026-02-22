@@ -1,0 +1,176 @@
+.workspace-sidebar {
+    width: 68px;
+    min-width: 68px;
+    height: 100%;
+    background: var(--void);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    z-index: 20;
+    pointer-events: auto;
+    /* macOS standard vibrancy blur under the dark void */
+    backdrop-filter: var(--lg-blur);
+    -webkit-backdrop-filter: var(--lg-blur);
+}
+
+.workspace-traffic-lights {
+    min-height: 60px;
+    height: 60px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.workspace-items {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+    width: 100%;
+}
+
+.workspace-item {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-lg);
+    background: var(--lg-bg);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-size: var(--type-title3-size);
+    font-weight: 600;
+    font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    transition: var(--transition-bounce);
+    box-shadow: var(--shadow-sm);
+    -webkit-app-region: no-drag;
+}
+
+.workspace-item:hover {
+    background: var(--lg-bg-hover);
+    color: var(--text-primary);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+.workspace-item.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.workspace-item-initials {
+    pointer-events: none;
+}
+
+.workspace-item-remove {
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    width: 20px;
+    height: 20px;
+    background: var(--error);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1;
+    font-weight: bold;
+    cursor: pointer;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: all 0.2s ease;
+    box-shadow: var(--shadow-sm);
+    z-index: 10;
+}
+
+.workspace-item:hover .workspace-item-remove {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.workspace-item-remove:hover {
+    background: var(--error-hover);
+    transform: scale(1.1) !important;
+}
+
+.workspace-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: var(--text-secondary);
+    color: #111;
+    /* Contrast against the badge */
+    font-size: 10px;
+    font-weight: 800;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 2px var(--void);
+    /* Cutout effect */
+}
+
+.workspace-item.active .workspace-badge {
+    background: var(--accent);
+    color: white;
+}
+
+.workspace-badge.muted {
+    background: var(--text-dim);
+    color: #222;
+}
+
+.workspace-divider {
+    width: 32px;
+    height: 1px;
+    background: var(--border-strong);
+    margin: var(--space-2) 0;
+    border-radius: 1px;
+}
+
+.workspace-add {
+    border-style: dashed;
+    background: transparent;
+    color: var(--text-muted);
+}
+
+.workspace-add:hover {
+    border-style: solid;
+    background: var(--lg-bg);
+    color: var(--text-secondary);
+}
+
+.workspace-footer {
+    padding-bottom: var(--space-4);
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+.workspace-settings {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--text-muted);
+}
+
+.workspace-settings:hover {
+    background: var(--lg-bg);
+    border-color: var(--border-subtle);
+    color: var(--text-secondary);
+}

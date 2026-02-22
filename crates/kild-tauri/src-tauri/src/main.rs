@@ -16,6 +16,7 @@ fn main() {
     let pty_manager = Arc::new(PtyManager::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(pty_manager)
         .setup(|app| {
             use tauri::Manager;
@@ -50,6 +51,7 @@ fn main() {
             commands::write_pty,
             commands::resize_pty,
             commands::close_pty,
+            commands::get_project_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running KILD Tauri application");

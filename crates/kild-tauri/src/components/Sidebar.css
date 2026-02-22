@@ -27,12 +27,35 @@
     border-bottom: 1px solid var(--border-subtle);
 }
 
-.sidebar-logo {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-secondary);
+.sidebar-workspace-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     pointer-events: none;
-    /* Let drag events pass through */
+    width: 100%;
+    padding: 0 var(--space-4);
+}
+
+.sidebar-workspace-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.sidebar-workspace-path {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    margin-top: 2px;
 }
 
 .sidebar-count {

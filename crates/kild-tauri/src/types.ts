@@ -6,6 +6,7 @@ export interface SessionInfo {
     worktree_path: string;
     created_at: string;
     session_id: string;
+    project_id: string;
     git_dirty: boolean;
     runtime_mode: "terminal" | "daemon";
 }

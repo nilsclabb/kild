@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { motion } from "framer-motion";
 import type { UserSettings } from "../types";
 import "./SettingsDialog.css";
 
@@ -29,8 +30,22 @@ export function SettingsDialog({ initialSettings, onClose, onSave }: SettingsDia
     };
 
     return (
-        <div className="dialog-overlay" onClick={onClose}>
-            <div className="dialog-content settings-dialog" onClick={(e) => e.stopPropagation()}>
+        <motion.div
+            className="dialog-overlay"
+            onClick={onClose}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeInOut" }}
+        >
+            <motion.div
+                className="dialog-content settings-dialog"
+                onClick={(e) => e.stopPropagation()}
+                initial={{ opacity: 0, scale: 0.9, y: 16 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                transition={{ type: "spring", stiffness: 400, damping: 25 }}
+            >
                 <header className="dialog-header">
                     <h2 className="dialog-title">Preferences</h2>
                     <button className="dialog-close" onClick={onClose}>✕</button>
@@ -96,7 +111,7 @@ export function SettingsDialog({ initialSettings, onClose, onSave }: SettingsDia
                         </button>
                     </footer>
                 </form>
-            </div>
-        </div>
+            </motion.div>
+        </motion.div>
     );
 }

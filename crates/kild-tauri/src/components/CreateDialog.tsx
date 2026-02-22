@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { motion } from "framer-motion";
 import "./CreateDialog.css";
 
 interface CreateDialogProps {
@@ -20,8 +21,22 @@ export function CreateDialog({ onSubmit, onClose }: CreateDialogProps) {
     };
 
     return (
-        <div className="dialog-overlay" onClick={onClose}>
-            <div className="dialog" onClick={(e) => e.stopPropagation()}>
+        <motion.div
+            className="dialog-overlay"
+            onClick={onClose}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeInOut" }}
+        >
+            <motion.div
+                className="dialog"
+                onClick={(e) => e.stopPropagation()}
+                initial={{ opacity: 0, scale: 0.9, y: 16 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                transition={{ type: "spring", stiffness: 400, damping: 25 }}
+            >
                 <h2 className="dialog-title">Create New Kild</h2>
                 <form onSubmit={handleSubmit}>
                     <div className="form-group">
@@ -70,7 +85,7 @@ export function CreateDialog({ onSubmit, onClose }: CreateDialogProps) {
                         </button>
                     </div>
                 </form>
-            </div>
-        </div>
+            </motion.div>
+        </motion.div>
     );
 }

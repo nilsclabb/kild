@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { motion } from "framer-motion";
 import type { SessionInfo } from "../types";
 import "./Sidebar.css";
 
@@ -8,11 +9,12 @@ interface SidebarProps {
     onSelect: (branch: string) => void;
     onCreateNew: () => void;
     loading: boolean;
-    theme: "light" | "dark";
-    onToggleTheme: () => void;
+    waitingBranches: Set<string>;
+    activeWorkspaceName: string;
+    activeWorkspacePath?: string;
 }
 
-export function Sidebar({ sessions, selectedBranch, onSelect, onCreateNew, loading, theme, onToggleTheme }: SidebarProps) {
+export function Sidebar({ sessions, selectedBranch, onSelect, onCreateNew, loading, waitingBranches, activeWorkspaceName, activeWorkspacePath }: SidebarProps) {
     const [searchQuery, setSearchQuery] = useState("");
 
     const filteredSessions = sessions.filter(
@@ -26,19 +28,31 @@ export function Sidebar({ sessions, selectedBranch, onSelect, onCreateNew, loadi
 
     return (
         <aside className="sidebar">
-            {/* Titlebar area — traffic lights sit here */}
             <div className="sidebar-titlebar" data-tauri-drag-region>
-                <span className="sidebar-logo" data-tauri-drag-region>Kild</span>
+                <div className="sidebar-workspace-info" data-tauri-drag-region>
+                    <div className="sidebar-workspace-name">{activeWorkspaceName}</div>
+                    {activeWorkspacePath && (
+                        <div className="sidebar-workspace-path" title={activeWorkspacePath}>
+                            {activeWorkspacePath}
+                        </div>
+                    )}
+                </div>
             </div>
 
             <div className="sidebar-header">
                 <span className="sidebar-label">Sessions</span>
-                <button className="sidebar-header-btn" onClick={onCreateNew} title="Create new kild">
+                <motion.button
+                    className="sidebar-header-btn"
+                    onClick={onCreateNew}
+                    title="Create new kild"
+                    whileTap={{ scale: 0.9 }}
+                    transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                     </svg>
-                </button>
+                </motion.button>
             </div>
 
             <div className="sidebar-search-container">
@@ -77,16 +91,20 @@ export function Sidebar({ sessions, selectedBranch, onSelect, onCreateNew, loadi
                                 Active ({active.length})
                             </h2>
                             <ul className="session-list">
-                                {active.map((s) => (
-                                    <li
-                                        key={s.branch}
-                                        className={`session-item ${selectedBranch === s.branch ? "selected" : ""}`}
-                                        onClick={() => onSelect(s.branch)}
-                                    >
-                                        <span className="session-branch">{s.branch}</span>
-                                        <span className="session-agent">{s.agent}</span>
-                                    </li>
-                                ))}
+                                {active.map((s) => {
+                                    const isWaiting = waitingBranches.has(s.branch);
+                                    return (
+                                        <li
+                                            key={s.branch}
+                                            className={`session-item ${selectedBranch === s.branch ? "selected" : ""}`}
+                                            onClick={() => onSelect(s.branch)}
+                                        >
+                                            <span className={`status-dot ${isWaiting ? "status-pending" : "status-running"}`} style={{ marginRight: 8, opacity: isWaiting ? 1 : 0 }} />
+                                            <span className="session-branch">{s.branch}</span>
+                                            <span className="session-agent">{s.agent}</span>
+                                        </li>
+                                    );
+                                })}
                             </ul>
                         </section>
                     )}
@@ -115,29 +133,7 @@ export function Sidebar({ sessions, selectedBranch, onSelect, onCreateNew, loadi
             )}
 
             <div className="sidebar-footer">
-                <button
-                    className="btn-theme-toggle"
-                    onClick={onToggleTheme}
-                    title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                >
-                    {theme === 'dark' ? (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
-                        </svg>
-                    ) : (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="4"></circle>
-                            <path d="M12 2v2"></path>
-                            <path d="M12 20v2"></path>
-                            <path d="m4.93 4.93 1.41 1.41"></path>
-                            <path d="m17.66 17.66 1.41 1.41"></path>
-                            <path d="M2 12h2"></path>
-                            <path d="M20 12h2"></path>
-                            <path d="m6.34 17.66-1.41 1.41"></path>
-                            <path d="m19.07 4.93-1.41 1.41"></path>
-                        </svg>
-                    )}
-                </button>
+                {/* Theme toggle moved to WorkspaceSidebar */}
             </div>
         </aside>
     );

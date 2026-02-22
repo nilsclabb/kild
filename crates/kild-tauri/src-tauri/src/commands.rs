@@ -18,6 +18,7 @@ pub struct SessionInfo {
     pub worktree_path: String,
     pub created_at: String,
     pub session_id: String,
+    pub project_id: String,
     pub git_dirty: bool,
     pub runtime_mode: String,
 }
@@ -45,6 +46,7 @@ impl SessionInfo {
             worktree_path: s.worktree_path.display().to_string(),
             created_at: s.created_at.clone(),
             session_id: s.id.to_string(),
+            project_id: s.project_id.to_string(),
             git_dirty,
             runtime_mode,
         }
@@ -91,11 +93,17 @@ pub fn destroy_session(branch: String, force: bool) -> Result<(), String> {
     kild_core::session_ops::destroy_session(&branch, force).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn get_project_info(path: String) -> Result<kild_core::git::types::ProjectInfo, String> {
+    kild_core::git::handler::detect_project_at(std::path::Path::new(&path))
+        .map_err(|e| format!("Git error in {}: {}", path, e))
+}
+
 /// Create a kild session: creates the worktree + session file WITHOUT
 /// spawning the agent in an external terminal. The agent is spawned later
 /// in the embedded PTY via `spawn_pty`.
 #[tauri::command]
-pub fn create_session(branch: String, agent: String) -> Result<SessionInfo, String> {
+pub fn create_session(branch: String, agent: String, cwd: Option<String>) -> Result<SessionInfo, String> {
     use kild_config::Config;
     use kild_core::sessions::{persistence, ports};
 
@@ -107,9 +115,14 @@ pub fn create_session(branch: String, agent: String) -> Result<SessionInfo, Stri
         .get_agent_command(&agent)
         .map_err(|e| format!("Unknown agent '{}': {}", agent, e))?;
 
-    // 2. Detect git project
-    let project =
-        kild_core::git::handler::detect_project().map_err(|e| format!("Git error: {}", e))?;
+    // 2. Detect git project based on cwd or current directory
+    let project = if let Some(path_str) = cwd {
+        kild_core::git::handler::detect_project_at(std::path::Path::new(&path_str))
+            .map_err(|e| format!("Git error in {}: {}", path_str, e))?
+    } else {
+        kild_core::git::handler::detect_project()
+            .map_err(|e| format!("Git error: {}", e))?
+    };
 
     let project_id: kild_protocol::ProjectId = project.id.clone().into();
     let branch_name: kild_protocol::BranchName = branch.clone().into();

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -13,14 +13,23 @@ interface TerminalProps {
     cwd: string;
     fontSize?: number;
     onExit?: () => void;
+    onPromptChange?: (active: boolean) => void;
 }
 
-export function Terminal({ sessionId, command, cwd, fontSize = 13, onExit }: TerminalProps) {
+export function Terminal({ sessionId, command, cwd, fontSize = 13, onExit, onPromptChange }: TerminalProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const onExitRef = useRef(onExit);
-    onExitRef.current = onExit;
+    useEffect(() => { onExitRef.current = onExit; }, [onExit]);
+
+    const onPromptChangeRef = useRef(onPromptChange);
+    useEffect(() => { onPromptChangeRef.current = onPromptChange; }, [onPromptChange]);
     const xtermRef = useRef<XTerm | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
+
+    // Prompt state
+    const [promptState, setPromptState] = useState<{ active: boolean; label: string }>({ active: false, label: "" });
+    const bufferRef = useRef("");
+    const timeoutRef = useRef<number | null>(null);
 
     // Handle font size changes without re-creating the terminal
     useEffect(() => {
@@ -76,7 +85,53 @@ export function Terminal({ sessionId, command, cwd, fontSize = 13, onExit }: Ter
                     for (let i = 0; i < raw.length; i++) {
                         bytes[i] = raw.charCodeAt(i);
                     }
-                    xterm.write(bytes);
+                    // Strip ANSI codes for logic processing
+                    const clean = raw.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+                    bufferRef.current += clean;
+                    if (bufferRef.current.length > 500) {
+                        bufferRef.current = bufferRef.current.slice(-500);
+                    }
+
+                    if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+
+                    // Hide prompt overlay immediately when new text comes in (implying agent is working)
+                    setPromptState(prev => {
+                        if (prev.active) {
+                            onPromptChangeRef.current?.(false);
+                            return { active: false, label: "" };
+                        }
+                        return prev;
+                    });
+
+                    // If stream goes silent for 600ms, check if we're hanging on a prompt
+                    timeoutRef.current = window.setTimeout(() => {
+                        const b = bufferRef.current;
+
+                        // Look for common interactive CLI prompts at the end of the buffer
+                        const patterns = [
+                            /([a-zA-Z0-9 _-]*)\s*\[[yY]\/[nN]\]\s*$/s,
+                            /([a-zA-Z0-9 _-]*)\s*\(\s*[yY]es\s*\/\s*[nN]o\s*\)\s*$/s,
+                            /(password|username|token|key):\s*$/si,
+                            /([a-zA-Z0-9 _-]+)\s*\?\s*$/s,
+                            /Select an option.*$/si,
+                            /\>\s*$/s,
+                        ];
+
+                        for (const p of patterns) {
+                            const match = b.match(p);
+                            if (match) {
+                                let label = match[1] || "Input Required";
+                                // Get the last line
+                                label = label.split('\n').pop()?.trim() || "Input Required";
+                                // Don't show ridiculously long labels
+                                if (label.length > 60) label = "Agent Needs Direction";
+
+                                setPromptState({ active: true, label: label + "?" });
+                                onPromptChangeRef.current?.(true);
+                                break;
+                            }
+                        }
+                    }, 600);
                 }
             }
         );
@@ -135,9 +190,42 @@ export function Terminal({ sessionId, command, cwd, fontSize = 13, onExit }: Ter
     }, [sessionId]);
 
     return (
-        <div
-            ref={containerRef}
-            className="terminal-container"
-        />
+        <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0 }}>
+            <div
+                ref={containerRef}
+                className="terminal-container"
+            />
+            {promptState.active && (
+                <div className="terminal-prompt-overlay" onClick={(e) => e.stopPropagation()}>
+                    <div className="terminal-prompt-glass glass">
+                        <div className="prompt-header">
+                            <span className="status-dot status-pending" />
+                            <span className="prompt-label">{promptState.label}</span>
+                        </div>
+                        <div className="prompt-input-wrapper">
+                            <input
+                                className="prompt-input"
+                                type="text"
+                                autoFocus
+                                placeholder="Type your response..."
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        const val = e.currentTarget.value;
+                                        invoke("write_pty", { sessionId, data: val + "\r" }).catch(() => { });
+                                        setPromptState({ active: false, label: "" });
+                                        onPromptChangeRef.current?.(false);
+                                        bufferRef.current = ""; // Reset buffer
+                                    } else if (e.key === 'Escape') {
+                                        setPromptState({ active: false, label: "" });
+                                        onPromptChangeRef.current?.(false);
+                                    }
+                                }}
+                            />
+                            <kbd className="prompt-hint">↵ Enter to submit</kbd>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 }

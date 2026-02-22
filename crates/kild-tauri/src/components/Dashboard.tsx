@@ -10,6 +10,7 @@ interface DashboardProps {
     onOpenTerminal: (session: SessionInfo) => void;
     onCloseTerminal: () => void;
     showTerminal: boolean;
+    waitingBranches: Set<string>;
 }
 
 export function Dashboard({
@@ -21,6 +22,7 @@ export function Dashboard({
     onOpenTerminal,
     onCloseTerminal,
     showTerminal,
+    waitingBranches,
 }: DashboardProps) {
     if (sessions.length === 0) {
         return (
@@ -55,13 +57,13 @@ export function Dashboard({
                             ← Back
                         </button>
                         <h2 className="detail-title">{selected.branch}</h2>
-                        <span className={`status-badge status-${selected.status}`}>
-                            {selected.status}
+                        <span className={`status-badge status-${waitingBranches.has(selected.branch) ? "pending" : selected.status}`}>
+                            {waitingBranches.has(selected.branch) ? "Waiting for Input" : selected.status}
                         </span>
                     </div>
                 </header>
 
-                {!showTerminal ? (
+                {!showTerminal && (
                     <>
                         <div className="detail-grid">
                             <div className="detail-card">
@@ -109,21 +111,6 @@ export function Dashboard({
                             </button>
                         </div>
                     </>
-                ) : (
-                    <div className="terminal-wrapper">
-                        <div className="terminal-toolbar">
-                            <span className="terminal-label">
-                                {selected.agent} — {selected.branch}
-                            </span>
-                            <button
-                                className="btn btn-ghost btn-sm"
-                                onClick={onCloseTerminal}
-                            >
-                                ✕ Hide Terminal
-                            </button>
-                        </div>
-                        {/* Terminal is rendered in App.tsx's terminals-layer */}
-                    </div>
                 )}
             </div>
         );
