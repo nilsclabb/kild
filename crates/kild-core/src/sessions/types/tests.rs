@@ -1,4 +1,5 @@
 use super::*;
+use crate::forge::types::PrCheckResult;
 use std::path::PathBuf;
 
 #[test]
@@ -15,6 +16,7 @@ fn test_session_creation() {
         3009,
         10,
         Some("2024-01-01T00:00:00Z".to_string()),
+        None,
         None,
         vec![],
         None,
@@ -103,7 +105,7 @@ fn test_create_session_request_with_note() {
     // Test CreateSessionRequest properly includes note
     let request_with_note = CreateSessionRequest::new(
         "feature-auth".to_string(),
-        crate::state::types::AgentMode::Agent("claude".to_string()),
+        kild_protocol::AgentMode::Agent("claude".to_string()),
         Some("OAuth2 implementation".to_string()),
     );
     assert_eq!(
@@ -114,7 +116,7 @@ fn test_create_session_request_with_note() {
     // Test request without note
     let request_without_note = CreateSessionRequest::new(
         "feature-auth".to_string(),
-        crate::state::types::AgentMode::Agent("claude".to_string()),
+        kild_protocol::AgentMode::Agent("claude".to_string()),
         None,
     );
     assert_eq!(request_without_note.note, None);
@@ -122,7 +124,7 @@ fn test_create_session_request_with_note() {
 
 #[test]
 fn test_create_session_request_agent_mode() {
-    use crate::state::types::AgentMode;
+    use kild_protocol::AgentMode;
 
     let request =
         CreateSessionRequest::new("test-branch".to_string(), AgentMode::DefaultAgent, None);
@@ -186,6 +188,7 @@ fn test_session_with_terminal_type_in_agent() {
         10,
         Some("2024-01-01T00:00:00Z".to_string()),
         None,
+        None,
         vec![agent],
         None,
         None,
@@ -247,7 +250,7 @@ fn test_session_backward_compatibility_terminal_window_id() {
 fn test_create_session_request_with_project_path() {
     let request = CreateSessionRequest::with_project_path(
         "test-branch".to_string(),
-        crate::state::types::AgentMode::Agent("claude".to_string()),
+        kild_protocol::AgentMode::Agent("claude".to_string()),
         None,
         PathBuf::from("/path/to/project"),
     );
@@ -262,7 +265,7 @@ fn test_create_session_request_with_project_path() {
 fn test_create_session_request_new_has_no_project_path() {
     let request = CreateSessionRequest::new(
         "test-branch".to_string(),
-        crate::state::types::AgentMode::DefaultAgent,
+        kild_protocol::AgentMode::DefaultAgent,
         None,
     );
     assert!(request.project_path.is_none());
@@ -287,6 +290,7 @@ fn test_is_worktree_valid_with_existing_path() {
         0,
         0,
         0,
+        None,
         None,
         None,
         vec![],
@@ -316,6 +320,7 @@ fn test_is_worktree_valid_with_missing_path() {
         0,
         None,
         None,
+        None,
         vec![],
         None,
         None,
@@ -325,45 +330,13 @@ fn test_is_worktree_valid_with_missing_path() {
     assert!(!session.is_worktree_valid());
 }
 
-// --- PrCheckResult tests ---
-
-#[test]
-fn test_pr_check_result_exists() {
-    let result = PrCheckResult::Exists;
-    assert!(result.exists());
-    assert!(!result.not_found());
-    assert!(!result.is_unavailable());
-}
-
-#[test]
-fn test_pr_check_result_not_found() {
-    let result = PrCheckResult::NotFound;
-    assert!(!result.exists());
-    assert!(result.not_found());
-    assert!(!result.is_unavailable());
-}
-
-#[test]
-fn test_pr_check_result_unavailable() {
-    let result = PrCheckResult::Unavailable;
-    assert!(!result.exists());
-    assert!(!result.not_found());
-    assert!(result.is_unavailable());
-}
-
-#[test]
-fn test_pr_check_result_default() {
-    let result = PrCheckResult::default();
-    assert!(result.is_unavailable());
-}
-
-// --- DestroySafetyInfo tests ---
+// --- DestroySafety tests ---
 
 #[test]
 fn test_should_block_on_uncommitted_changes() {
     use crate::git::types::WorktreeStatus;
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             has_uncommitted_changes: true,
             ..Default::default()
@@ -377,7 +350,7 @@ fn test_should_block_on_uncommitted_changes() {
 fn test_should_not_block_on_unpushed_only() {
     use crate::git::types::WorktreeStatus;
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             has_uncommitted_changes: false,
             unpushed_commit_count: 5,
@@ -395,7 +368,7 @@ fn test_should_block_on_status_check_failed() {
     use crate::git::types::WorktreeStatus;
 
     // When status check fails, has_uncommitted_changes defaults to true (conservative)
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             has_uncommitted_changes: true,
             status_check_failed: true,
@@ -409,7 +382,7 @@ fn test_should_block_on_status_check_failed() {
 
 #[test]
 fn test_has_warnings_no_pr() {
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         pr_status: PrCheckResult::NotFound,
         ..Default::default()
     };
@@ -421,7 +394,7 @@ fn test_has_warnings_pr_unavailable_no_warning() {
     use crate::git::types::WorktreeStatus;
 
     // When gh CLI unavailable, we shouldn't warn about PR
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         pr_status: PrCheckResult::Unavailable,
         git_status: WorktreeStatus {
             has_remote_branch: true,
@@ -435,7 +408,7 @@ fn test_has_warnings_pr_unavailable_no_warning() {
 fn test_has_warnings_never_pushed() {
     use crate::git::types::WorktreeStatus;
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             has_remote_branch: false,
             unpushed_commit_count: 0,
@@ -450,7 +423,7 @@ fn test_has_warnings_never_pushed() {
 fn test_warning_messages_uncommitted_with_details() {
     use crate::git::types::{UncommittedDetails, WorktreeStatus};
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             has_uncommitted_changes: true,
             uncommitted_details: Some(UncommittedDetails {
@@ -473,7 +446,7 @@ fn test_warning_messages_uncommitted_with_details() {
 fn test_warning_messages_singular_commit() {
     use crate::git::types::WorktreeStatus;
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             unpushed_commit_count: 1,
             has_remote_branch: true,
@@ -491,7 +464,7 @@ fn test_warning_messages_singular_commit() {
 fn test_warning_messages_plural_commits() {
     use crate::git::types::WorktreeStatus;
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             unpushed_commit_count: 3,
             has_remote_branch: true,
@@ -508,7 +481,7 @@ fn test_warning_messages_never_pushed_not_shown_with_unpushed() {
     use crate::git::types::WorktreeStatus;
 
     // When there are unpushed commits, "never pushed" is redundant
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             unpushed_commit_count: 5,
             has_remote_branch: false,
@@ -525,7 +498,7 @@ fn test_warning_messages_never_pushed_not_shown_with_unpushed() {
 fn test_warning_messages_status_check_failed() {
     use crate::git::types::WorktreeStatus;
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             has_uncommitted_changes: true,
             status_check_failed: true,
@@ -544,7 +517,7 @@ fn test_warning_messages_status_check_failed() {
 fn test_warning_messages_no_warnings() {
     use crate::git::types::WorktreeStatus;
 
-    let info = DestroySafetyInfo {
+    let info = DestroySafety {
         git_status: WorktreeStatus {
             has_uncommitted_changes: false,
             unpushed_commit_count: 0,
@@ -680,6 +653,7 @@ fn test_session_with_multiple_agents_serialization() {
         10,
         Some("2024-01-01T00:00:00Z".to_string()),
         None,
+        None,
         vec![
             AgentProcess::new(
                 "claude".to_string(),
@@ -805,65 +779,13 @@ fn test_session_with_corrupted_agent_fails_to_deserialize() {
 }
 
 #[test]
-fn test_agent_status_display() {
-    assert_eq!(AgentStatus::Working.to_string(), "working");
-    assert_eq!(AgentStatus::Idle.to_string(), "idle");
-    assert_eq!(AgentStatus::Waiting.to_string(), "waiting");
-    assert_eq!(AgentStatus::Done.to_string(), "done");
-    assert_eq!(AgentStatus::Error.to_string(), "error");
-}
-
-#[test]
-fn test_agent_status_from_str() {
-    assert_eq!(
-        "working".parse::<AgentStatus>().unwrap(),
-        AgentStatus::Working
-    );
-    assert_eq!("idle".parse::<AgentStatus>().unwrap(), AgentStatus::Idle);
-    assert_eq!(
-        "waiting".parse::<AgentStatus>().unwrap(),
-        AgentStatus::Waiting
-    );
-    assert_eq!("done".parse::<AgentStatus>().unwrap(), AgentStatus::Done);
-    assert_eq!("error".parse::<AgentStatus>().unwrap(), AgentStatus::Error);
-}
-
-#[test]
-fn test_agent_status_from_str_invalid() {
-    let err = "invalid".parse::<AgentStatus>().unwrap_err();
-    assert!(err.contains("Invalid agent status"));
-    assert!(err.contains("invalid"));
-}
-
-#[test]
-fn test_agent_status_serde_roundtrip() {
-    for status in [
-        AgentStatus::Working,
-        AgentStatus::Idle,
-        AgentStatus::Waiting,
-        AgentStatus::Done,
-        AgentStatus::Error,
-    ] {
-        let json = serde_json::to_string(&status).unwrap();
-        let parsed: AgentStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, status);
-    }
-}
-
-#[test]
-fn test_agent_status_serde_lowercase() {
-    let json = serde_json::to_string(&AgentStatus::Working).unwrap();
-    assert_eq!(json, r#""working""#);
-}
-
-#[test]
-fn test_agent_status_info_serde_roundtrip() {
-    let info = AgentStatusInfo {
+fn test_agent_status_record_serde_roundtrip() {
+    let info = AgentStatusRecord {
         status: AgentStatus::Working,
         updated_at: "2026-02-05T12:00:00Z".to_string(),
     };
     let json = serde_json::to_string(&info).unwrap();
-    let parsed: AgentStatusInfo = serde_json::from_str(&json).unwrap();
+    let parsed: AgentStatusRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, info);
 }
 
@@ -905,6 +827,7 @@ fn test_session_with_agent_session_id_roundtrip() {
         10,
         None,
         None,
+        None,
         vec![],
         Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
         None,
@@ -935,6 +858,7 @@ fn test_session_agent_session_id_survives_clear_agents() {
         3000,
         3009,
         10,
+        None,
         None,
         None,
         vec![],
@@ -979,7 +903,7 @@ fn test_session_backward_compatibility_runtime_mode() {
 
 #[test]
 fn test_session_with_runtime_mode_roundtrip() {
-    use crate::state::types::RuntimeMode;
+    use kild_protocol::RuntimeMode;
 
     let session = Session::new(
         "test/branch".into(),
@@ -992,6 +916,7 @@ fn test_session_with_runtime_mode_roundtrip() {
         3000,
         3009,
         10,
+        None,
         None,
         None,
         vec![],
@@ -1010,7 +935,7 @@ fn test_session_with_runtime_mode_roundtrip() {
 
 #[test]
 fn test_session_runtime_mode_survives_clear_agents() {
-    use crate::state::types::RuntimeMode;
+    use kild_protocol::RuntimeMode;
 
     let mut session = Session::new(
         "test/branch".into(),
@@ -1023,6 +948,7 @@ fn test_session_runtime_mode_survives_clear_agents() {
         3000,
         3009,
         10,
+        None,
         None,
         None,
         vec![],
@@ -1116,9 +1042,29 @@ fn test_process_status_roundtrip() {
     }
 }
 
+// --- From<kild_protocol::SessionStatus> tests ---
+
+#[test]
+fn test_protocol_running_maps_to_active() {
+    let core_status: SessionStatus = kild_protocol::SessionStatus::Running.into();
+    assert_eq!(core_status, SessionStatus::Active);
+}
+
+#[test]
+fn test_protocol_creating_maps_to_active() {
+    let core_status: SessionStatus = kild_protocol::SessionStatus::Creating.into();
+    assert_eq!(core_status, SessionStatus::Active);
+}
+
+#[test]
+fn test_protocol_stopped_maps_to_stopped() {
+    let core_status: SessionStatus = kild_protocol::SessionStatus::Stopped.into();
+    assert_eq!(core_status, SessionStatus::Stopped);
+}
+
 #[test]
 fn test_session_new_sets_all_fields() {
-    use crate::state::types::RuntimeMode;
+    use kild_protocol::RuntimeMode;
 
     let session = Session::new(
         "proj/feature".into(),
@@ -1133,6 +1079,7 @@ fn test_session_new_sets_all_fields() {
         10,
         Some("2024-01-01T12:00:00Z".to_string()),
         Some("Auth feature".to_string()),
+        None,
         vec![],
         Some("sid-123".to_string()),
         Some("tl-456".to_string()),
@@ -1259,6 +1206,7 @@ fn test_session_agent_methods() {
         0,
         None,
         None,
+        None,
         agents,
         None,
         None,
@@ -1335,4 +1283,132 @@ fn test_session_with_old_pascal_case_status_deserializes() {
     // Verify re-serialization outputs snake_case
     let reserialized = serde_json::to_string(&session).unwrap();
     assert!(reserialized.contains(r#""status":"active""#));
+}
+
+#[test]
+fn test_use_main_worktree_serde_roundtrip() {
+    let mut session = Session::new_for_test("honryu", PathBuf::from("/tmp/project"));
+    session.use_main_worktree = true;
+
+    let json = serde_json::to_string(&session).unwrap();
+    let reloaded: Session = serde_json::from_str(&json).unwrap();
+    assert!(
+        reloaded.use_main_worktree,
+        "use_main_worktree must survive serde roundtrip — this guards against \
+         remove_dir_all on the project root during destroy"
+    );
+}
+
+#[test]
+fn test_use_main_worktree_defaults_false_on_old_json() {
+    let json = r#"{
+        "id": "test/honryu",
+        "project_id": "test",
+        "branch": "honryu",
+        "worktree_path": "/tmp/project",
+        "agent": "claude",
+        "status": "Active",
+        "created_at": "2024-01-01T00:00:00Z",
+        "port_range_start": 3000,
+        "port_range_end": 3009,
+        "port_count": 10
+    }"#;
+
+    let session: Session = serde_json::from_str(json).unwrap();
+    assert!(
+        !session.use_main_worktree,
+        "use_main_worktree must default to false for old sessions without the field"
+    );
+}
+
+// --- issue field tests ---
+
+#[test]
+fn test_session_backward_compatibility_issue() {
+    // Old session JSON without issue field should deserialize with None
+    let json = r#"{
+        "id": "test/branch",
+        "project_id": "test",
+        "branch": "branch",
+        "worktree_path": "/tmp/test",
+        "agent": "claude",
+        "status": "Active",
+        "created_at": "2024-01-01T00:00:00Z",
+        "port_range_start": 3000,
+        "port_range_end": 3009,
+        "port_count": 10
+    }"#;
+
+    let session: Session = serde_json::from_str(json).unwrap();
+    assert_eq!(session.issue, None);
+    assert_eq!(&*session.branch, "branch");
+}
+
+#[test]
+fn test_session_with_issue_roundtrip() {
+    let session = Session::new(
+        "test/branch".into(),
+        "test".into(),
+        "branch".into(),
+        PathBuf::from("/tmp/test"),
+        "claude".to_string(),
+        SessionStatus::Active,
+        "2024-01-01T00:00:00Z".to_string(),
+        3000,
+        3009,
+        10,
+        None,
+        None,
+        Some(42),
+        vec![],
+        None,
+        None,
+        None,
+    );
+
+    assert_eq!(session.issue, Some(42));
+
+    // Verify round-trip preserves issue
+    let serialized = serde_json::to_string(&session).unwrap();
+    let deserialized: Session = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.issue, Some(42));
+}
+
+#[test]
+fn test_session_with_issue_from_json() {
+    let json = r#"{
+        "id": "test/branch",
+        "project_id": "test",
+        "branch": "branch",
+        "worktree_path": "/tmp/test",
+        "agent": "claude",
+        "status": "Active",
+        "created_at": "2024-01-01T00:00:00Z",
+        "port_range_start": 3000,
+        "port_range_end": 3009,
+        "port_count": 10,
+        "issue": 123
+    }"#;
+
+    let session: Session = serde_json::from_str(json).unwrap();
+    assert_eq!(session.issue, Some(123));
+}
+
+#[test]
+fn test_create_session_request_with_issue() {
+    let request = CreateSessionRequest::new(
+        "feature-auth".to_string(),
+        kild_protocol::AgentMode::Agent("claude".to_string()),
+        Some("OAuth2 implementation".to_string()),
+    )
+    .with_issue(Some(42));
+    assert_eq!(request.issue, Some(42));
+
+    // Without issue
+    let request_no_issue = CreateSessionRequest::new(
+        "feature-auth".to_string(),
+        kild_protocol::AgentMode::Agent("claude".to_string()),
+        None,
+    );
+    assert_eq!(request_no_issue.issue, None);
 }

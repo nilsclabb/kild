@@ -53,6 +53,13 @@ pub struct Session {
     #[serde(default)]
     pub note: Option<String>,
 
+    /// Optional GitHub issue number linked to this kild.
+    ///
+    /// Set via `--issue` / `-i` flag during `kild create`. Used by wave planning
+    /// to track which issues are already claimed by active kilds.
+    #[serde(default)]
+    pub issue: Option<u32>,
+
     /// Agent session ID for resume support.
     ///
     /// Generated on `kild create` and fresh `kild open` for resume-capable agents (e.g., Claude Code).
@@ -61,6 +68,15 @@ pub struct Session {
     /// Stored at the Session level (not AgentProcess) so it survives `clear_agents()` on stop.
     #[serde(default)]
     pub agent_session_id: Option<String>,
+
+    /// Previous agent session IDs preserved across fresh opens.
+    ///
+    /// When `kild open` (without `--resume`) generates a new `agent_session_id`,
+    /// the previous ID is pushed here before overwriting. This allows recovery
+    /// of earlier conversations that would otherwise become unreachable.
+    /// Most recent ID is last in the vec.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_session_id_history: Vec<String>,
 
     /// Task list ID for Claude Code task list persistence.
     ///
@@ -76,7 +92,15 @@ pub struct Session {
     /// Used by `kild open` to auto-detect runtime mode when no flags are passed.
     /// `None` for sessions created before this field was added.
     #[serde(default)]
-    pub runtime_mode: Option<crate::state::types::RuntimeMode>,
+    pub runtime_mode: Option<kild_protocol::RuntimeMode>,
+
+    /// Whether this session was created with `--main` (runs from project root, no linked worktree).
+    ///
+    /// When true, `worktree_path` points to the project root itself.
+    /// `destroy_session` skips git worktree removal and directory deletion
+    /// to prevent `remove_dir_all` from being called on the project root.
+    #[serde(default)]
+    pub use_main_worktree: bool,
 
     /// All agent processes opened in this kild session.
     ///
@@ -103,10 +127,11 @@ impl Session {
         port_count: u16,
         last_activity: Option<String>,
         note: Option<String>,
+        issue: Option<u32>,
         agents: Vec<AgentProcess>,
         agent_session_id: Option<String>,
         task_list_id: Option<String>,
-        runtime_mode: Option<crate::state::types::RuntimeMode>,
+        runtime_mode: Option<kild_protocol::RuntimeMode>,
     ) -> Self {
         Self {
             id,
@@ -121,10 +146,13 @@ impl Session {
             port_count,
             last_activity,
             note,
+            issue,
             agents,
             agent_session_id,
+            agent_session_id_history: Vec::new(),
             task_list_id,
             runtime_mode,
+            use_main_worktree: false,
         }
     }
 
@@ -148,6 +176,33 @@ impl Session {
     /// Whether this session has any tracked agents.
     pub fn has_agents(&self) -> bool {
         !self.agents.is_empty()
+    }
+
+    /// PID file keys for all agents in this session.
+    ///
+    /// Multi-agent sessions use per-agent spawn IDs as keys. Agents with an
+    /// empty `spawn_id` (created before per-agent tracking) fall back to the
+    /// session ID, which may produce duplicates. Sessions with no tracked
+    /// agents at all fall back to a single session-ID key.
+    pub fn pid_keys(&self) -> Vec<String> {
+        if self.agents.is_empty() {
+            tracing::warn!(
+                event = "core.session.pid_cleanup_no_agents",
+                session_id = %self.id,
+                "Session has no tracked agents, falling back to session-level PID file cleanup"
+            );
+            return vec![self.id.to_string()];
+        }
+        self.agents
+            .iter()
+            .map(|agent| {
+                if agent.spawn_id().is_empty() {
+                    self.id.to_string()
+                } else {
+                    agent.spawn_id().to_string()
+                }
+            })
+            .collect()
     }
 
     /// Number of tracked agents.
@@ -179,6 +234,23 @@ impl Session {
         self.agents = agents;
     }
 
+    /// Rotate agent_session_id, preserving the previous ID in history.
+    ///
+    /// No-op on the history if the new ID is identical to the current one (resume path).
+    /// Returns `true` if the previous ID was different and moved to history.
+    pub fn rotate_agent_session_id(&mut self, new_id: String) -> bool {
+        let rotated = if let Some(prev) = self.agent_session_id.take()
+            && prev != new_id
+        {
+            self.agent_session_id_history.push(prev);
+            true
+        } else {
+            false
+        };
+        self.agent_session_id = Some(new_id);
+        rotated
+    }
+
     /// Create a minimal Session for testing purposes.
     #[cfg(test)]
     pub fn new_for_test(branch: impl Into<BranchName>, worktree_path: PathBuf) -> Self {
@@ -196,10 +268,13 @@ impl Session {
             port_count: 0,
             last_activity: None,
             note: None,
+            issue: None,
             agents: vec![],
             agent_session_id: None,
+            agent_session_id_history: Vec::new(),
             task_list_id: None,
             runtime_mode: None,
+            use_main_worktree: false,
         }
     }
 }

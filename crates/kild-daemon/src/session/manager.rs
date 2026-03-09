@@ -8,7 +8,7 @@ use crate::errors::DaemonError;
 use crate::pty::manager::PtyManager;
 use crate::pty::output::{PtyExitEvent, spawn_pty_reader};
 use crate::session::state::{ClientId, DaemonSession, SessionState};
-use crate::types::{DaemonConfig, SessionInfo};
+use crate::types::{DaemonConfig, DaemonSessionStatus};
 
 /// Orchestrates session lifecycle within the daemon.
 ///
@@ -64,7 +64,7 @@ impl SessionManager {
         rows: u16,
         cols: u16,
         use_login_shell: bool,
-    ) -> Result<SessionInfo, DaemonError> {
+    ) -> Result<DaemonSessionStatus, DaemonError> {
         if self.sessions.contains_key(session_id) {
             return Err(DaemonError::SessionAlreadyExists(session_id.to_string()));
         }
@@ -127,7 +127,7 @@ impl SessionManager {
         // Transition session to Running
         session.set_running(output_tx, pty_pid)?;
 
-        let info = session.to_session_info();
+        let info = session.to_daemon_session_status();
         self.sessions.insert(session_id.to_string(), session);
 
         info!(
@@ -206,6 +206,20 @@ impl SessionManager {
             .ok_or_else(|| DaemonError::SessionNotFound(session_id.to_string()))?;
 
         pty.resize(rows, cols)
+    }
+
+    /// Get the cached PTY dimensions for a session.
+    ///
+    /// Returns `Some((rows, cols))` if the session has an active PTY.
+    /// Returns `None` if no PTY is registered for `session_id` (e.g. the session
+    /// was never started, has already been stopped, or was removed mid-flight).
+    ///
+    /// Returns the dimensions last successfully set via [`resize_pty`], which
+    /// match the PTY creation size initially. Does **not** query the kernel.
+    pub fn pty_size(&self, session_id: &str) -> Option<(u16, u16)> {
+        self.pty_manager
+            .get(session_id)
+            .map(|pty| (pty.size().rows, pty.size().cols))
     }
 
     /// Write data to a session's PTY stdin.
@@ -315,15 +329,17 @@ impl SessionManager {
     }
 
     /// Get session info by ID.
-    pub fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
-        self.sessions.get(session_id).map(|s| s.to_session_info())
+    pub fn get_session(&self, session_id: &str) -> Option<DaemonSessionStatus> {
+        self.sessions
+            .get(session_id)
+            .map(|s| s.to_daemon_session_status())
     }
 
     /// List all sessions.
-    pub fn list_sessions(&self) -> Vec<SessionInfo> {
+    pub fn list_sessions(&self) -> Vec<DaemonSessionStatus> {
         self.sessions
             .values()
-            .map(|s| s.to_session_info())
+            .map(|s| s.to_daemon_session_status())
             .collect()
     }
 
@@ -581,6 +597,32 @@ mod tests {
         assert_eq!(mgr.next_client_id(), 1);
         assert_eq!(mgr.next_client_id(), 2);
         assert_eq!(mgr.next_client_id(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_pty_size_returns_current_dimensions() {
+        let (mut mgr, _rx) = test_manager();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let wd = tmpdir.path().to_str().unwrap();
+
+        mgr.create_session("s1", wd, "sleep", &["10".to_string()], &[], 24, 80, false)
+            .unwrap();
+
+        // Initial size matches creation args
+        assert_eq!(mgr.pty_size("s1"), Some((24, 80)));
+
+        // After resize, size updates
+        mgr.resize_pty("s1", 50, 200).unwrap();
+        assert_eq!(mgr.pty_size("s1"), Some((50, 200)));
+
+        // Cleanup
+        let _ = mgr.destroy_session("s1", true);
+    }
+
+    #[test]
+    fn test_pty_size_returns_none_for_unknown_session() {
+        let (mgr, _rx) = test_manager();
+        assert_eq!(mgr.pty_size("nonexistent"), None);
     }
 
     #[test]

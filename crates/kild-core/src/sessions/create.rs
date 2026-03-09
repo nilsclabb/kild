@@ -1,15 +1,14 @@
-use kild_paths::KildPaths;
 use tracing::{debug, error, info, warn};
 
 use crate::agents;
 use crate::git;
 use crate::sessions::{errors::SessionError, persistence, ports, types::*, validation};
-use crate::terminal;
 use kild_config::{Config, KildConfig};
+use kild_protocol::{AgentMode, RuntimeMode};
 
 use super::daemon_helpers::{
-    build_daemon_create_request, compute_spawn_id, ensure_shim_binary, setup_claude_integration,
-    setup_codex_integration, setup_opencode_integration, spawn_and_save_attach_window,
+    AgentSpawnParams, compute_spawn_id, deliver_initial_prompt_for_session, ensure_shim_binary,
+    spawn_and_save_attach_window, spawn_daemon_agent, spawn_terminal_agent,
 };
 
 pub fn create_session(
@@ -18,7 +17,7 @@ pub fn create_session(
 ) -> Result<Session, SessionError> {
     // Determine agent name and command based on AgentMode
     let (agent, agent_command) = match &request.agent_mode {
-        crate::state::types::AgentMode::BareShell => {
+        AgentMode::BareShell => {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| {
                 let fallback = "/bin/sh".to_string();
                 warn!(
@@ -31,7 +30,7 @@ pub fn create_session(
             info!(event = "core.session.create_shell_selected", shell = %shell);
             ("shell".to_string(), shell)
         }
-        crate::state::types::AgentMode::Agent(name) => {
+        AgentMode::Agent(name) => {
             let command =
                 kild_config
                     .get_agent_command(name)
@@ -50,7 +49,7 @@ pub fn create_session(
 
             (name.clone(), command)
         }
-        crate::state::types::AgentMode::DefaultAgent => {
+        AgentMode::DefaultAgent => {
             let name = kild_config.agent.default.clone();
             let command =
                 kild_config
@@ -110,9 +109,9 @@ pub fn create_session(
                 event = "core.session.project_path_explicit_provided",
                 path = %path.display()
             );
-            git::handler::detect_project_at(path)
+            git::detect_project_at(path)
         }
-        None => git::handler::detect_project(),
+        None => git::detect_project(),
     }
     .map_err(|e| SessionError::GitError { source: e })?;
 
@@ -139,6 +138,18 @@ pub fn create_session(
 
     // Ensure sessions directory exists
     persistence::ensure_sessions_directory(&config.sessions_dir())?;
+
+    // Check for existing session before hitting the git layer
+    if persistence::find_session_by_name(&config.sessions_dir(), &validated.name)?.is_some() {
+        warn!(
+            event = "core.session.create_failed",
+            branch = %validated.name,
+            reason = "already_exists",
+        );
+        return Err(SessionError::AlreadyExists {
+            name: validated.name.into_inner(),
+        });
+    }
 
     // 4. Allocate port range (I/O)
     let (port_start, port_end) = ports::allocate_port_range(
@@ -176,95 +187,71 @@ pub fn create_session(
         git_config.fetch_before_create = Some(false);
     }
 
-    let worktree = git::handler::create_worktree(
-        base_config.kild_dir(),
-        &project,
-        &validated.name,
-        Some(kild_config),
-        &git_config,
-    )
-    .map_err(|e| SessionError::GitError { source: e })?;
+    let worktree = if request.use_main_worktree {
+        // Skip worktree creation: run from the project root (main branch).
+        // Used for supervisory sessions (e.g. honryu brain) that don't write code.
+        let base_branch = git_config
+            .base_branch
+            .clone()
+            .unwrap_or_else(|| "main".to_string());
+        info!(
+            event = "core.session.main_worktree_used",
+            session_id = %session_id,
+            path = %project.path.display(),
+            branch = %base_branch,
+        );
+        git::types::WorktreeState {
+            path: project.path.clone(),
+            branch: base_branch,
+            project_id: project.id.clone(),
+        }
+    } else {
+        let wt = git::handler::create_worktree(
+            base_config.kild_dir(),
+            &project,
+            &validated.name,
+            Some(kild_config),
+            &git_config,
+        )
+        .map_err(|e| SessionError::GitError { source: e })?;
 
-    info!(
-        event = "core.session.worktree_created",
-        session_id = %session_id,
-        worktree_path = %worktree.path.display(),
-        branch = worktree.branch
-    );
+        info!(
+            event = "core.session.worktree_created",
+            session_id = %session_id,
+            worktree_path = %wt.path.display(),
+            branch = wt.branch
+        );
+        wt
+    };
 
     // 5. Launch agent — branch on runtime mode
     let spawn_id = compute_spawn_id(&session_id, 0);
-    let now = chrono::Utc::now().to_rfc3339();
+
+    let spawn_params = AgentSpawnParams {
+        branch: &validated.name,
+        agent: &validated.agent,
+        agent_command: &validated.command,
+        worktree_path: &worktree.path,
+        session_id: &session_id,
+        spawn_id: &spawn_id,
+        task_list_id: task_list_id.as_deref(),
+        project_id: &project_id,
+        kild_config,
+        rows: request.rows,
+        cols: request.cols,
+    };
 
     let initial_agent = match request.runtime_mode {
-        crate::state::types::RuntimeMode::Terminal => {
-            setup_codex_integration(&validated.agent);
-            setup_opencode_integration(&validated.agent, &worktree.path);
-            setup_claude_integration(&validated.agent);
-
-            // Terminal path: spawn in external terminal
-            // Wrap with `env` to strip nesting-detection vars and inject agent env.
-            let terminal_command = {
-                let mut env_prefix: Vec<(String, String)> = Vec::new();
-                if let Some(ref tlid) = task_list_id {
-                    env_prefix.extend(agents::resume::task_list_env_vars(&agent, tlid));
-                }
-                env_prefix.extend(agents::resume::codex_env_vars(&agent, &validated.name));
-                env_prefix.extend(agents::resume::claude_env_vars(&agent, &validated.name));
-                super::env_cleanup::build_env_command(&env_prefix, &validated.command)
-            };
-            debug!(
-                event = "core.session.terminal_command_constructed",
-                command = %terminal_command,
-            );
-            let spawn_result = terminal::handler::spawn_terminal(
-                &worktree.path,
-                &terminal_command,
-                kild_config,
-                Some(&spawn_id),
-                Some(base_config.kild_dir()),
-            )
-            .map_err(|e| SessionError::TerminalError { source: e })?;
-
-            let command = if spawn_result.command_executed.trim().is_empty() {
-                format!("{} (command not captured)", validated.agent)
-            } else {
-                spawn_result.command_executed.clone()
-            };
-            AgentProcess::new(
-                validated.agent.clone(),
-                spawn_id,
-                spawn_result.process_id,
-                spawn_result.process_name.clone(),
-                spawn_result.process_start_time,
-                Some(spawn_result.terminal_type.clone()),
-                spawn_result.terminal_window_id.clone(),
-                command,
-                now.clone(),
-                None,
-            )?
-        }
-        crate::state::types::RuntimeMode::Daemon => {
-            // New path: request daemon to create PTY session.
-            // The daemon is a pure PTY manager — it spawns a command in a
-            // working directory. Worktree creation and session persistence
-            // are handled here in kild-core.
-
-            // Auto-start daemon if not running (config.daemon.auto_start, default: true)
-            crate::daemon::ensure_daemon_running(kild_config)?;
-
-            // Ensure the tmux shim binary is installed at ~/.kild/bin/tmux
+        RuntimeMode::Terminal => spawn_terminal_agent(&spawn_params)?,
+        RuntimeMode::Daemon => {
+            // Create-only: ensure tmux shim binary is installed at ~/.kild/bin/tmux
             if let Err(msg) = ensure_shim_binary() {
                 warn!(event = "core.session.shim_binary_failed", error = %msg);
                 eprintln!("Warning: {}", msg);
                 eprintln!("Agent teams will not work in this session.");
             }
 
-            setup_codex_integration(&validated.agent);
-            setup_opencode_integration(&validated.agent, &worktree.path);
-            setup_claude_integration(&validated.agent);
-
-            // Pre-emptive cleanup: remove stale daemon session if previous destroy failed.
+            // Create-only: pre-emptive cleanup of stale daemon session from previous destroy failure.
             // Daemon-not-running and session-not-found are expected (normal case).
             match crate::daemon::client::destroy_daemon_session(&spawn_id, true) {
                 Ok(()) => {
@@ -282,130 +269,12 @@ pub fn create_session(
                 }
             }
 
-            let (cmd, cmd_args, env_vars, use_login_shell) = build_daemon_create_request(
-                &validated.command,
-                &validated.agent,
-                &session_id,
-                task_list_id.as_deref(),
-                &validated.name,
-            )?;
+            let agent_process = spawn_daemon_agent(&spawn_params)?;
 
-            let daemon_request = crate::daemon::client::DaemonCreateRequest {
-                request_id: &spawn_id,
-                session_id: &spawn_id,
-                working_directory: &worktree.path,
-                command: &cmd,
-                args: &cmd_args,
-                env_vars: &env_vars,
-                rows: 24,
-                cols: 80,
-                use_login_shell,
-            };
-            let daemon_result = crate::daemon::client::create_pty_session(&daemon_request)
-                .map_err(|e| SessionError::DaemonError {
-                    message: e.to_string(),
-                })?;
-
-            // Early exit detection: poll with exponential backoff until Running or Stopped.
-            // Fast-failing processes (bad resume session, missing binary, env issues)
-            // typically exit within 50ms of spawn. Exit early on Running confirmation.
-            // Worst-case window: 350ms (50+100+200) before falling through with None (assume alive).
-            let maybe_early_exit: Option<Option<i32>> = {
-                let mut result = None;
-                for delay_ms in [50u64, 100, 200] {
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                    match crate::daemon::client::get_session_info(&daemon_result.daemon_session_id)
-                    {
-                        Ok(Some((kild_protocol::SessionStatus::Stopped, exit_code))) => {
-                            result = Some(exit_code);
-                            break;
-                        }
-                        Ok(Some((kild_protocol::SessionStatus::Running, _))) => break, // confirmed alive
-                        _ => {} // Creating or IPC error — keep polling
-                    }
-                }
-                result
-            };
-
-            if let Some(exit_code) = maybe_early_exit {
-                let scrollback_tail =
-                    crate::daemon::client::read_scrollback(&daemon_result.daemon_session_id)
-                        .inspect_err(|e| {
-                            debug!(
-                                event = "core.session.scrollback_read_failed",
-                                daemon_session_id = daemon_result.daemon_session_id,
-                                error = %e,
-                            );
-                        })
-                        .ok()
-                        .flatten()
-                        .map(|bytes| {
-                            let text = String::from_utf8_lossy(&bytes);
-                            let lines: Vec<&str> = text.lines().collect();
-                            let start = lines.len().saturating_sub(20);
-                            lines[start..].join("\n")
-                        })
-                        .unwrap_or_default();
-
-                if let Err(e) = crate::daemon::client::destroy_daemon_session(
-                    &daemon_result.daemon_session_id,
-                    true,
-                ) {
-                    warn!(
-                        event = "core.session.create_daemon_cleanup_failed",
-                        daemon_session_id = %daemon_result.daemon_session_id,
-                        error = %e,
-                    );
-                }
-
-                return Err(SessionError::DaemonPtyExitedEarly {
-                    exit_code,
-                    scrollback_tail,
-                });
-            }
-
-            // Initialize tmux shim state directory
-            let shim_init_result = (|| -> Result<(), String> {
-                let shim_dir = KildPaths::resolve()
-                    .map_err(|e| e.to_string())?
-                    .shim_session_dir(&session_id);
-                std::fs::create_dir_all(&shim_dir)
-                    .map_err(|e| format!("failed to create shim state directory: {}", e))?;
-
-                let initial_state = serde_json::json!({
-                    "next_pane_id": 1,
-                    "session_name": "kild_0",
-                    "panes": {
-                        "%0": {
-                            "daemon_session_id": daemon_result.daemon_session_id,
-                            "title": "",
-                            "border_style": "",
-                            "window_id": "0",
-                            "hidden": false
-                        }
-                    },
-                    "windows": {
-                        "0": { "name": "main", "pane_ids": ["%0"] }
-                    },
-                    "sessions": {
-                        "kild_0": { "name": "kild_0", "windows": ["0"] }
-                    }
-                });
-
-                let lock_path = shim_dir.join("panes.lock");
-                std::fs::File::create(&lock_path)
-                    .map_err(|e| format!("failed to create shim lock file: {}", e))?;
-
-                let panes_path = shim_dir.join("panes.json");
-                let json = serde_json::to_string_pretty(&initial_state)
-                    .map_err(|e| format!("failed to serialize shim state: {}", e))?;
-                std::fs::write(&panes_path, json)
-                    .map_err(|e| format!("failed to write shim state: {}", e))?;
-
-                Ok(())
-            })();
-
-            if let Err(e) = shim_init_result {
+            // Create-only: initialize tmux shim state directory
+            if let Some(dsid) = agent_process.daemon_session_id()
+                && let Err(e) = super::shim_init::init_pane_registry(&session_id, dsid)
+            {
                 error!(
                     event = "core.session.shim_init_failed",
                     session_id = %session_id,
@@ -415,22 +284,12 @@ pub fn create_session(
                 eprintln!("Agent teams will not work in this session.");
             }
 
-            AgentProcess::new(
-                validated.agent.clone(),
-                spawn_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                validated.command.clone(),
-                now.clone(),
-                Some(daemon_result.daemon_session_id),
-            )?
+            agent_process
         }
     };
 
     // 6. Create session record
+    let now = chrono::Utc::now().to_rfc3339();
     let mut session = Session::new(
         session_id.clone(),
         project_id,
@@ -444,17 +303,32 @@ pub fn create_session(
         config.default_port_count,
         Some(now),
         request.note.clone(),
+        request.issue,
         vec![initial_agent],
         agent_session_id,
         task_list_id,
         Some(request.runtime_mode.clone()),
     );
 
+    session.use_main_worktree = request.use_main_worktree;
+
     // 7. Save session BEFORE spawning attach window so `kild attach` can find it
     persistence::save_session_to_file(&session, &config.sessions_dir())?;
 
+    // 7a+7b. Write initial prompt to dropbox and deliver to agent (best-effort, may block up to 20s).
+    // Fleet claude sessions skip PTY delivery — dropbox task.md + Claude inbox is more reliable.
+    if let Some(ref prompt) = request.initial_prompt {
+        deliver_initial_prompt_for_session(
+            &session.project_id,
+            &validated.name,
+            &validated.agent,
+            session.latest_agent().and_then(|a| a.daemon_session_id()),
+            prompt,
+        );
+    }
+
     // 8. Spawn attach window (best-effort) and update session with terminal info
-    if request.runtime_mode == crate::state::types::RuntimeMode::Daemon {
+    if request.runtime_mode == RuntimeMode::Daemon {
         spawn_and_save_attach_window(
             &mut session,
             &validated.name,
@@ -506,6 +380,7 @@ mod tests {
             3009,
             10,
             Some(chrono::Utc::now().to_rfc3339()),
+            None,
             None,
             vec![],
             None,
@@ -616,6 +491,7 @@ mod tests {
                 10,
                 Some(chrono::Utc::now().to_rfc3339()),
                 None,
+                None,
                 vec![agent],
                 None,
                 None,
@@ -646,7 +522,6 @@ mod tests {
 
     #[test]
     fn test_create_session_request_project_path_affects_project_detection() {
-        use git2::Repository;
         use std::fs;
 
         let temp_dir = std::env::temp_dir().join(format!(
@@ -657,21 +532,13 @@ mod tests {
         fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
         // Initialize a git repo at the temp path
-        let repo = Repository::init(&temp_dir).expect("Failed to init git repo");
-        {
-            let sig = repo
-                .signature()
-                .unwrap_or_else(|_| git2::Signature::now("Test", "test@test.com").unwrap());
-            let tree_id = repo.index().unwrap().write_tree().unwrap();
-            let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-                .expect("Failed to create initial commit");
-        }
+        crate::git::test_support::init_repo_with_commit(&temp_dir)
+            .expect("Failed to init git repo");
 
         // Create the request with explicit project_path
         let request = CreateSessionRequest::with_project_path(
             "test-branch".to_string(),
-            crate::state::types::AgentMode::Agent("claude".to_string()),
+            AgentMode::Agent("claude".to_string()),
             None,
             temp_dir.clone(),
         );
@@ -684,8 +551,8 @@ mod tests {
         assert_eq!(request.project_path.as_ref().unwrap(), &temp_dir);
 
         let project = match &request.project_path {
-            Some(path) => git::handler::detect_project_at(path),
-            None => git::handler::detect_project(),
+            Some(path) => git::detect_project_at(path),
+            None => git::detect_project(),
         };
 
         assert!(project.is_ok(), "Project detection should succeed");
@@ -702,7 +569,7 @@ mod tests {
         // Also verify that without project_path, we'd get a different result
         let request_without_path = CreateSessionRequest::new(
             "test-branch".to_string(),
-            crate::state::types::AgentMode::Agent("claude".to_string()),
+            AgentMode::Agent("claude".to_string()),
             None,
         );
         assert!(
@@ -718,7 +585,7 @@ mod tests {
     fn test_create_session_request_none_project_path_uses_cwd_detection() {
         let request = CreateSessionRequest::new(
             "test-branch".to_string(),
-            crate::state::types::AgentMode::Agent("claude".to_string()),
+            AgentMode::Agent("claude".to_string()),
             Some("test note".to_string()),
         );
 
@@ -778,6 +645,7 @@ mod tests {
             3009,
             10,
             Some(chrono::Utc::now().to_rfc3339()),
+            None,
             None,
             vec![],
             None,
@@ -876,6 +744,7 @@ mod tests {
             10,
             Some(chrono::Utc::now().to_rfc3339()),
             None,
+            None,
             vec![agent],
             None,
             None,
@@ -940,6 +809,7 @@ mod tests {
             3009,
             10,
             Some(chrono::Utc::now().to_rfc3339()),
+            None,
             None,
             vec![], // No agents (old session)
             None,

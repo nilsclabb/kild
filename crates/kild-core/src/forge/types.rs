@@ -105,12 +105,61 @@ impl std::fmt::Display for ReviewStatus {
     }
 }
 
+/// Merge strategy for landing a PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MergeStrategy {
+    /// Squash all commits into one (default).
+    #[default]
+    Squash,
+    /// Create a merge commit.
+    Merge,
+    /// Rebase commits onto the base branch.
+    Rebase,
+}
+
+impl MergeStrategy {
+    /// Returns the `gh pr merge` flag for this strategy.
+    pub fn gh_flag(&self) -> &'static str {
+        match self {
+            MergeStrategy::Squash => "--squash",
+            MergeStrategy::Merge => "--merge",
+            MergeStrategy::Rebase => "--rebase",
+        }
+    }
+}
+
+impl std::fmt::Display for MergeStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Squash => write!(f, "squash"),
+            Self::Merge => write!(f, "merge"),
+            Self::Rebase => write!(f, "rebase"),
+        }
+    }
+}
+
+impl std::str::FromStr for MergeStrategy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "squash" => Ok(MergeStrategy::Squash),
+            "merge" => Ok(MergeStrategy::Merge),
+            "rebase" => Ok(MergeStrategy::Rebase),
+            other => Err(format!(
+                "Unknown merge strategy '{}'. Valid: squash, merge, rebase",
+                other
+            )),
+        }
+    }
+}
+
 /// PR metadata stored as a sidecar file (`{session_id}.pr`).
 ///
 /// Fetched from a forge platform and cached locally.
 /// Refreshed on demand via `kild pr --refresh`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PrInfo {
+pub struct PullRequest {
     pub number: u32,
     pub url: String,
     pub state: PrState,
@@ -121,10 +170,109 @@ pub struct PrInfo {
     pub updated_at: String,
 }
 
+/// Computed merge readiness status for a branch.
+///
+/// Combines git health metrics with forge/PR data to determine
+/// whether a branch is ready to merge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeReadiness {
+    /// Clean, pushed, PR open, CI passing
+    Ready,
+    /// Has unpushed commits
+    NeedsPush,
+    /// Behind base branch significantly
+    NeedsRebase,
+    /// Cannot merge cleanly into base
+    HasConflicts,
+    /// Conflict detection failed — status unknown, treat as blocked
+    ConflictCheckFailed,
+    /// Pushed but no PR exists
+    NeedsPr,
+    /// PR exists but CI is failing
+    CiFailing,
+    /// Ready to merge locally (no remote configured)
+    ReadyLocal,
+}
+
+impl MergeReadiness {
+    /// Compute merge readiness from extracted git and forge signals.
+    ///
+    /// Parameters are primitive values extracted by the caller from git/forge
+    /// data, keeping the forge module decoupled from git types.
+    ///
+    /// Priority order (highest severity first):
+    /// 1. HasConflicts / ConflictCheckFailed — blocks merge entirely
+    /// 2. NeedsRebase — behind base, conflicts likely if not rebased
+    /// 3. NeedsPush — local-only commits, PR can't be created/updated
+    /// 4. NeedsPr — pushed but no tracking PR exists
+    /// 5. CiFailing — PR exists but not passing checks
+    /// 6. Ready / ReadyLocal — all checks passed
+    ///
+    /// # Parameters
+    ///
+    /// - `merge_clean`: `Some(true)` = clean, `Some(false)` = conflicts, `None` = check failed.
+    ///   Obtained via `ConflictStatus::is_clean()`.
+    /// - `behind_base`: commits behind the base branch (from `BaseBranchDrift::behind`).
+    /// - `has_remote`: whether any remote is configured.
+    /// - `has_unpushed`: whether there are unpushed commits or the branch was never pushed.
+    ///   Obtained via `WorktreeStatus::has_unpushed()`.
+    /// - `pr_info`: optional PR metadata from the forge.
+    pub fn compute(
+        merge_clean: Option<bool>,
+        behind_base: usize,
+        has_remote: bool,
+        has_unpushed: bool,
+        pr_info: Option<&PullRequest>,
+    ) -> Self {
+        match merge_clean {
+            Some(false) => return Self::HasConflicts,
+            None => return Self::ConflictCheckFailed,
+            Some(true) => {}
+        }
+
+        if behind_base > 0 {
+            return Self::NeedsRebase;
+        }
+
+        if !has_remote {
+            return Self::ReadyLocal;
+        }
+
+        if has_unpushed {
+            return Self::NeedsPush;
+        }
+
+        let Some(pr) = pr_info else {
+            return Self::NeedsPr;
+        };
+
+        if pr.ci_status == CiStatus::Failing {
+            return Self::CiFailing;
+        }
+
+        Self::Ready
+    }
+}
+
+impl std::fmt::Display for MergeReadiness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ready => write!(f, "Ready"),
+            Self::NeedsPush => write!(f, "Needs push"),
+            Self::NeedsRebase => write!(f, "Needs rebase"),
+            Self::HasConflicts => write!(f, "Has conflicts"),
+            Self::ConflictCheckFailed => write!(f, "Conflict check failed"),
+            Self::NeedsPr => write!(f, "Needs PR"),
+            Self::CiFailing => write!(f, "CI failing"),
+            Self::ReadyLocal => write!(f, "Ready (local)"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_forge_type_as_str() {
         assert_eq!(ForgeType::GitHub.as_str(), "github");
@@ -281,8 +429,8 @@ mod tests {
     }
 
     #[test]
-    fn test_pr_info_serde_roundtrip() {
-        let info = PrInfo {
+    fn test_pull_request_serde_roundtrip() {
+        let info = PullRequest {
             number: 45,
             url: "https://github.com/org/repo/pull/45".to_string(),
             state: PrState::Open,
@@ -293,13 +441,13 @@ mod tests {
             updated_at: "2026-02-05T12:00:00Z".to_string(),
         };
         let json = serde_json::to_string(&info).unwrap();
-        let parsed: PrInfo = serde_json::from_str(&json).unwrap();
+        let parsed: PullRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, info);
     }
 
     #[test]
-    fn test_pr_info_with_none_summaries() {
-        let info = PrInfo {
+    fn test_pull_request_with_none_summaries() {
+        let info = PullRequest {
             number: 1,
             url: "https://github.com/org/repo/pull/1".to_string(),
             state: PrState::Draft,
@@ -310,7 +458,180 @@ mod tests {
             updated_at: "2026-02-05T12:00:00Z".to_string(),
         };
         let json = serde_json::to_string(&info).unwrap();
-        let parsed: PrInfo = serde_json::from_str(&json).unwrap();
+        let parsed: PullRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, info);
+    }
+
+    // --- MergeReadiness tests ---
+    // Tests use scalar params directly — no git type dependencies.
+
+    fn make_pr(ci_status: CiStatus) -> PullRequest {
+        PullRequest {
+            number: 1,
+            url: "https://example.com/pull/1".to_string(),
+            state: PrState::Open,
+            ci_status,
+            ci_summary: None,
+            review_status: ReviewStatus::Unknown,
+            review_summary: None,
+            updated_at: "2026-02-09T12:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_readiness_has_conflicts() {
+        assert_eq!(
+            MergeReadiness::compute(Some(false), 0, true, false, None),
+            MergeReadiness::HasConflicts
+        );
+    }
+
+    #[test]
+    fn test_readiness_conflict_check_failed() {
+        assert_eq!(
+            MergeReadiness::compute(None, 0, true, false, None),
+            MergeReadiness::ConflictCheckFailed
+        );
+    }
+
+    #[test]
+    fn test_readiness_needs_rebase() {
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 5, true, false, None),
+            MergeReadiness::NeedsRebase
+        );
+    }
+
+    #[test]
+    fn test_readiness_ready_local() {
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, false, false, None),
+            MergeReadiness::ReadyLocal
+        );
+    }
+
+    #[test]
+    fn test_readiness_needs_push() {
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, true, true, None),
+            MergeReadiness::NeedsPush
+        );
+    }
+
+    #[test]
+    fn test_readiness_needs_pr() {
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, true, false, None),
+            MergeReadiness::NeedsPr
+        );
+    }
+
+    #[test]
+    fn test_readiness_ci_failing() {
+        let pr = make_pr(CiStatus::Failing);
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, true, false, Some(&pr)),
+            MergeReadiness::CiFailing
+        );
+    }
+
+    #[test]
+    fn test_readiness_ready() {
+        let pr = make_pr(CiStatus::Passing);
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, true, false, Some(&pr)),
+            MergeReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn test_readiness_display() {
+        assert_eq!(MergeReadiness::Ready.to_string(), "Ready");
+        assert_eq!(MergeReadiness::NeedsPush.to_string(), "Needs push");
+        assert_eq!(MergeReadiness::NeedsRebase.to_string(), "Needs rebase");
+        assert_eq!(MergeReadiness::HasConflicts.to_string(), "Has conflicts");
+        assert_eq!(
+            MergeReadiness::ConflictCheckFailed.to_string(),
+            "Conflict check failed"
+        );
+        assert_eq!(MergeReadiness::NeedsPr.to_string(), "Needs PR");
+        assert_eq!(MergeReadiness::CiFailing.to_string(), "CI failing");
+        assert_eq!(MergeReadiness::ReadyLocal.to_string(), "Ready (local)");
+    }
+
+    #[test]
+    fn test_readiness_serde() {
+        let json = serde_json::to_string(&MergeReadiness::NeedsRebase).unwrap();
+        assert_eq!(json, "\"needs_rebase\"");
+
+        let json = serde_json::to_string(&MergeReadiness::HasConflicts).unwrap();
+        assert_eq!(json, "\"has_conflicts\"");
+
+        let json = serde_json::to_string(&MergeReadiness::ConflictCheckFailed).unwrap();
+        assert_eq!(json, "\"conflict_check_failed\"");
+
+        let json = serde_json::to_string(&MergeReadiness::ReadyLocal).unwrap();
+        assert_eq!(json, "\"ready_local\"");
+    }
+
+    #[test]
+    fn test_readiness_ready_with_pending_ci() {
+        let pr = make_pr(CiStatus::Pending);
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, true, false, Some(&pr)),
+            MergeReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn test_readiness_ready_with_unknown_ci() {
+        let pr = make_pr(CiStatus::Unknown);
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, true, false, Some(&pr)),
+            MergeReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn test_readiness_ready_with_draft_pr() {
+        let pr = PullRequest {
+            state: PrState::Draft,
+            ..make_pr(CiStatus::Passing)
+        };
+        assert_eq!(
+            MergeReadiness::compute(Some(true), 0, true, false, Some(&pr)),
+            MergeReadiness::Ready
+        );
+    }
+
+    // --- MergeStrategy tests ---
+
+    #[test]
+    fn test_merge_strategy_default_is_squash() {
+        assert_eq!(MergeStrategy::default(), MergeStrategy::Squash);
+    }
+
+    #[test]
+    fn test_merge_strategy_display() {
+        assert_eq!(MergeStrategy::Squash.to_string(), "squash");
+        assert_eq!(MergeStrategy::Merge.to_string(), "merge");
+        assert_eq!(MergeStrategy::Rebase.to_string(), "rebase");
+    }
+
+    #[test]
+    fn test_merge_strategy_gh_flag() {
+        assert_eq!(MergeStrategy::Squash.gh_flag(), "--squash");
+        assert_eq!(MergeStrategy::Merge.gh_flag(), "--merge");
+        assert_eq!(MergeStrategy::Rebase.gh_flag(), "--rebase");
+    }
+
+    #[test]
+    fn test_merge_strategy_from_str() {
+        use std::str::FromStr;
+        assert_eq!(MergeStrategy::from_str("squash"), Ok(MergeStrategy::Squash));
+        assert_eq!(MergeStrategy::from_str("merge"), Ok(MergeStrategy::Merge));
+        assert_eq!(MergeStrategy::from_str("rebase"), Ok(MergeStrategy::Rebase));
+        assert_eq!(MergeStrategy::from_str("SQUASH"), Ok(MergeStrategy::Squash));
+        assert!(MergeStrategy::from_str("invalid").is_err());
     }
 }

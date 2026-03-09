@@ -4,6 +4,7 @@ use tracing::{error, info, warn};
 use kild_core::CreateSessionRequest;
 use kild_core::events;
 use kild_core::session_ops;
+use kild_core::sessions::fleet;
 
 use super::helpers::{load_config_with_warning, resolve_runtime_mode, shorten_home_path};
 use crate::color;
@@ -84,10 +85,22 @@ pub(crate) fn handle_create_command(
     let no_daemon_flag = matches.get_flag("no-daemon");
     let runtime_mode = resolve_runtime_mode(daemon_flag, no_daemon_flag, &config);
 
+    let use_main = matches.get_flag("main");
+    let initial_prompt = matches.get_one::<String>("initial-prompt").cloned();
+    let initial_prompt_for_warning = initial_prompt.clone();
+    let issue = matches.get_one::<u32>("issue").copied();
+
+    let rows = matches.get_one::<u16>("rows").copied();
+    let cols = matches.get_one::<u16>("cols").copied();
+
     let request = CreateSessionRequest::new(branch.clone(), agent_mode, note)
+        .with_issue(issue)
         .with_base_branch(base_branch)
         .with_no_fetch(no_fetch)
-        .with_runtime_mode(runtime_mode);
+        .with_runtime_mode(runtime_mode)
+        .with_main_worktree(use_main)
+        .with_initial_prompt(initial_prompt)
+        .with_pty_size(rows, cols);
 
     match session_ops::create_session(request, &config) {
         Ok(session) => {
@@ -123,6 +136,44 @@ pub(crate) fn handle_create_command(
                 color::muted("Status:"),
                 color::status(&status_str)
             );
+
+            // Warn fleet claude sessions about --initial-prompt deprecation.
+            // Deliver the prompt via the reliable inbox path instead.
+            if let Some(ref prompt) = initial_prompt_for_warning
+                && fleet::fleet_mode_active(&session.branch)
+                && fleet::is_claude_fleet_agent(&session.agent)
+            {
+                eprintln!();
+                eprintln!(
+                    "{}",
+                    color::warning("Warning: --initial-prompt is unreliable for fleet sessions.")
+                );
+                eprintln!(
+                    "  {}",
+                    color::hint(&format!(
+                        "Use instead: kild inject {} \"<your message>\"",
+                        session.branch
+                    ))
+                );
+
+                // Best-effort: deliver via inbox (the path that actually works).
+                let safe_name = fleet::fleet_safe_name(&session.branch);
+                match fleet::write_to_inbox(fleet::BRAIN_BRANCH, &safe_name, prompt) {
+                    Ok(()) => {
+                        eprintln!("  {} Delivered via inbox as fallback.", color::muted("→"));
+                    }
+                    Err(e) => {
+                        eprintln!("  {} Inbox fallback also failed: {}", color::error("✗"), e);
+                        eprintln!(
+                            "  {}",
+                            color::hint(&format!(
+                                "Manually run: kild inject {} \"...\"",
+                                session.branch
+                            ))
+                        );
+                    }
+                }
+            }
 
             info!(
                 event = "cli.create_completed",

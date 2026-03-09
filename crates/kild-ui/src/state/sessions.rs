@@ -1,15 +1,15 @@
-use kild_core::SessionInfo;
+use kild_core::SessionSnapshot;
 
 /// Encapsulates session display data with refresh tracking.
 ///
 /// Provides a clean API for managing kild displays, filtering by project,
 /// and tracking refresh timestamps. Encapsulates:
-/// - `displays`: The list of SessionInfo items
+/// - `displays`: The list of `SessionSnapshot` items
 /// - `load_error`: Error from last refresh attempt
 /// - `last_refresh`: Timestamp of last successful refresh
 pub struct SessionStore {
     /// List of kild displays (private to enforce invariants).
-    displays: Vec<SessionInfo>,
+    displays: Vec<SessionSnapshot>,
     /// Error from last refresh attempt, if any.
     load_error: Option<String>,
     /// Timestamp of last successful status refresh.
@@ -29,7 +29,7 @@ impl SessionStore {
 
     /// Create a session store with provided data (for testing).
     #[cfg(test)]
-    pub fn from_data(displays: Vec<SessionInfo>, load_error: Option<String>) -> Self {
+    pub fn from_data(displays: Vec<SessionSnapshot>, load_error: Option<String>) -> Self {
         Self {
             displays,
             load_error,
@@ -39,13 +39,13 @@ impl SessionStore {
 
     /// Set displays directly (for testing).
     #[cfg(test)]
-    pub fn set_displays(&mut self, displays: Vec<SessionInfo>) {
+    pub fn set_displays(&mut self, displays: Vec<SessionSnapshot>) {
         self.displays = displays;
     }
 
     /// Get mutable access to displays (for testing status updates).
     #[cfg(test)]
-    pub fn displays_mut(&mut self) -> &mut Vec<SessionInfo> {
+    pub fn displays_mut(&mut self) -> &mut Vec<SessionSnapshot> {
         &mut self.displays
     }
 
@@ -100,7 +100,7 @@ impl SessionStore {
     }
 
     /// Get all displays.
-    pub fn displays(&self) -> &[SessionInfo] {
+    pub fn displays(&self) -> &[SessionSnapshot] {
         &self.displays
     }
 
@@ -108,7 +108,7 @@ impl SessionStore {
     ///
     /// Returns all displays where `session.project_id` matches the given ID.
     /// If `project_id` is `None`, returns all displays (unfiltered).
-    pub fn filtered_by_project(&self, project_id: Option<&str>) -> Vec<&SessionInfo> {
+    pub fn filtered_by_project(&self, project_id: Option<&str>) -> Vec<&SessionSnapshot> {
         match project_id {
             Some(id) => self
                 .displays
@@ -179,13 +179,14 @@ mod tests {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
             None,
         );
 
-        let display = SessionInfo::from_session(session);
+        let display = SessionSnapshot::from_session(session);
         assert_eq!(display.process_status, ProcessStatus::Stopped);
         // Non-existent path should result in Unknown git status
         assert_eq!(display.git_status, GitStatus::Unknown);
@@ -223,13 +224,14 @@ mod tests {
             0,
             None,
             None,
+            None,
             vec![agent],
             None,
             None,
             None,
         );
 
-        let display = SessionInfo::from_session(session);
+        let display = SessionSnapshot::from_session(session);
         // With window detection fallback, should attempt to check window
         // In test environment without Ghostty running, will fall back to Stopped
         assert!(
@@ -291,13 +293,14 @@ mod tests {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
             None,
         );
 
-        let display = SessionInfo::from_session(session);
+        let display = SessionSnapshot::from_session(session);
 
         assert_eq!(display.git_status, GitStatus::Dirty);
         assert!(
@@ -363,6 +366,7 @@ mod tests {
             0,
             None,
             None,
+            None,
             make_agent_with_pid(Some(999999)), // Non-existent PID
             None,
             None,
@@ -381,6 +385,7 @@ mod tests {
             0,
             0,
             0,
+            None,
             None,
             None,
             make_agent_with_pid(Some(std::process::id())), // Current process PID
@@ -403,6 +408,7 @@ mod tests {
             0,
             None,
             None,
+            None,
             make_agent_with_pid(None),
             None,
             None,
@@ -411,19 +417,19 @@ mod tests {
 
         let mut store = SessionStore::from_data(Vec::new(), None);
         store.set_displays(vec![
-            SessionInfo {
+            SessionSnapshot {
                 session: session_with_dead_pid,
                 process_status: ProcessStatus::Running, // Start as Running (incorrect)
                 git_status: GitStatus::Unknown,
                 uncommitted_diff: None,
             },
-            SessionInfo {
+            SessionSnapshot {
                 session: session_with_live_pid,
                 process_status: ProcessStatus::Stopped, // Start as Stopped (incorrect)
                 git_status: GitStatus::Unknown,
                 uncommitted_diff: None,
             },
-            SessionInfo {
+            SessionSnapshot {
                 session: session_no_pid,
                 process_status: ProcessStatus::Stopped, // Start as Stopped (correct)
                 git_status: GitStatus::Unknown,
@@ -431,18 +437,28 @@ mod tests {
             },
         ]);
 
-        let original_len = store.displays().len();
+        let original_ids: Vec<_> = store
+            .displays()
+            .iter()
+            .map(|d| d.session.id.clone())
+            .collect();
         store.update_statuses_only();
 
         // Note: update_statuses_only() may trigger a full refresh if the session count
         // on disk differs from the in-memory count (see issue #103 fix). In that case,
         // the displays will be replaced with whatever is on disk.
         //
-        // If the display count changed, a refresh was triggered and we can't test
-        // the status update logic directly. Skip the assertions in that case.
-        if store.displays().len() != original_len {
-            // Refresh was triggered due to count mismatch - this is expected behavior
-            // when running tests in an environment with actual session files.
+        // Check session IDs (not just count) to detect a refresh: the count can stay
+        // the same when disk sessions happen to equal the in-memory count, but the IDs
+        // will differ because our synthetic test IDs won't match real session files.
+        let new_ids: Vec<_> = store
+            .displays()
+            .iter()
+            .map(|d| d.session.id.clone())
+            .collect();
+        if original_ids != new_ids {
+            // Refresh was triggered - this is expected behavior when running tests
+            // in an environment with actual session files.
             return;
         }
 

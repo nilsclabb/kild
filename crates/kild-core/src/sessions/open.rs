@@ -1,14 +1,13 @@
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::agents;
 use crate::sessions::{errors::SessionError, persistence, types::*};
-use crate::terminal;
-use crate::terminal::types::SpawnResult;
 use kild_config::{Config, KildConfig};
+use kild_protocol::{OpenMode, RuntimeMode};
 
 use super::daemon_helpers::{
-    build_daemon_create_request, compute_spawn_id, setup_claude_integration,
-    setup_codex_integration, setup_opencode_integration, spawn_and_save_attach_window,
+    AgentSpawnParams, compute_spawn_id, deliver_initial_prompt_for_session,
+    spawn_and_save_attach_window, spawn_daemon_agent, spawn_terminal_agent,
 };
 
 /// Resolve the effective runtime mode for `open_session`.
@@ -16,10 +15,10 @@ use super::daemon_helpers::{
 /// Priority: explicit CLI flag > session's stored mode > config > Terminal default.
 /// Returns the resolved mode and its source label for logging.
 fn resolve_effective_runtime_mode(
-    explicit: Option<crate::state::types::RuntimeMode>,
-    from_session: Option<crate::state::types::RuntimeMode>,
+    explicit: Option<RuntimeMode>,
+    from_session: Option<RuntimeMode>,
     config: &kild_config::KildConfig,
-) -> (crate::state::types::RuntimeMode, &'static str) {
+) -> (RuntimeMode, &'static str) {
     if let Some(mode) = explicit {
         return (mode, "explicit");
     }
@@ -27,63 +26,42 @@ fn resolve_effective_runtime_mode(
         return (mode, "session");
     }
     if config.is_daemon_enabled() {
-        (crate::state::types::RuntimeMode::Daemon, "config")
+        (RuntimeMode::Daemon, "config")
     } else {
-        (crate::state::types::RuntimeMode::Terminal, "default")
+        (RuntimeMode::Terminal, "default")
     }
 }
 
-/// Capture process metadata from spawn result for PID reuse protection.
+/// Opens a new agent in an existing kild.
 ///
-/// Attempts to get fresh process info from the OS. Falls back to spawn result metadata
-/// if process info retrieval fails (logs warning in that case).
-fn capture_process_metadata(
-    spawn_result: &SpawnResult,
-    event_prefix: &str,
-) -> (Option<String>, Option<u64>) {
-    let Some(pid) = spawn_result.process_id else {
-        return (
-            spawn_result.process_name.clone(),
-            spawn_result.process_start_time,
-        );
-    };
-
-    match crate::process::get_process_info(pid) {
-        Ok(info) => (Some(info.name), Some(info.start_time)),
-        Err(e) => {
-            warn!(
-                event = %format!("core.session.{}_process_info_failed", event_prefix),
-                pid = pid,
-                error = %e,
-                "Failed to get process metadata after spawn - using spawn result metadata"
-            );
-            (
-                spawn_result.process_name.clone(),
-                spawn_result.process_start_time,
-            )
-        }
-    }
-}
-
-/// Opens a new agent terminal in an existing kild (additive - doesn't close existing terminals).
+/// If the session already has a running agent, returns [`SessionError::AlreadyActive`].
+/// Use `kild attach` to view the running agent, or `kild stop` then `kild open` to restart.
+/// Bare shell opens (`OpenMode::BareShell`) bypass the active-session guard since they
+/// don't spawn agents and can't corrupt session state.
 ///
-/// This is the preferred way to add agents to a kild. Unlike restart, this does NOT
-/// close existing terminals - multiple agents can run in the same kild.
+/// For daemon sessions, a liveness check distinguishes truly-active sessions from
+/// stale-active ones (daemon PTY exited without `kild stop`). Stale sessions are
+/// synced to Stopped and the open proceeds.
 ///
-/// The `runtime_mode` parameter overrides the runtime mode. Pass `None` to auto-detect
+/// The `runtime_mode` field overrides the runtime mode. Leave as `None` to auto-detect
 /// from the session's stored mode, then config, then Terminal default.
-pub fn open_session(
-    name: &str,
-    mode: crate::state::types::OpenMode,
-    runtime_mode: Option<crate::state::types::RuntimeMode>,
-    resume: bool,
-    yolo: bool,
-) -> Result<Session, SessionError> {
+pub fn open_session(request: &super::types::OpenSessionRequest) -> Result<Session, SessionError> {
+    let name = &request.name;
+    let mode = &request.mode;
+    let runtime_mode = request.runtime_mode.clone();
+    let resume = request.resume;
+    let yolo = request.yolo;
+    let no_attach = request.no_attach;
+    let initial_prompt = request.initial_prompt.as_deref();
+    let rows = request.rows;
+    let cols = request.cols;
+
     info!(
         event = "core.session.open_started",
         name = name,
         mode = ?mode,
-        yolo = yolo
+        yolo = yolo,
+        resume = resume
     );
 
     let config = Config::new();
@@ -123,81 +101,133 @@ pub fn open_session(
         });
     }
 
-    // 3. Determine agent and command based on OpenMode
-    let is_bare_shell = matches!(mode, crate::state::types::OpenMode::BareShell);
-    let (agent, agent_command) =
-        match mode {
-            crate::state::types::OpenMode::BareShell => {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-                    let fallback = "/bin/sh".to_string();
-                    warn!(
-                        event = "core.session.shell_env_missing",
-                        fallback = %fallback,
-                        "$SHELL not set, falling back to /bin/sh"
-                    );
-                    fallback
-                });
-                info!(event = "core.session.open_shell_selected", shell = %shell);
-                ("shell".to_string(), shell)
-            }
-            crate::state::types::OpenMode::Agent(name) => {
-                info!(event = "core.session.open_agent_selected", agent = name);
-
-                // Warn if agent CLI is not available in PATH
-                if let Some(false) = agents::is_agent_available(&name) {
-                    warn!(
-                        event = "core.session.agent_not_available",
-                        agent = %name,
-                        session_id = %session.id,
-                        "Agent CLI '{}' not found in PATH - session may fail to start",
-                        name
-                    );
-                }
-
-                let command = kild_config.get_agent_command(&name).map_err(|e| {
-                    SessionError::ConfigError {
-                        message: e.to_string(),
-                    }
-                })?;
-                (name, command)
-            }
-            crate::state::types::OpenMode::DefaultAgent => {
-                // Use session's stored agent, but fall back to config default
-                // when the session was created with --no-agent (stored as "shell").
-                // "shell" is not a registered agent, so get_agent_command would fail.
-                let agent = if session.agent == "shell" {
-                    let default = kild_config.agent.default.clone();
-                    info!(
-                        event = "core.session.open_agent_fallback_to_config",
-                        stored_agent = "shell",
-                        config_default = %default,
-                        "Session was created with --no-agent, falling back to config default"
-                    );
-                    default
-                } else {
-                    session.agent.clone()
-                };
-                info!(event = "core.session.open_agent_selected", agent = agent);
-
-                // Warn if agent CLI is not available in PATH
-                if let Some(false) = agents::is_agent_available(&agent) {
-                    warn!(
-                        event = "core.session.agent_not_available",
-                        agent = %agent,
-                        session_id = %session.id,
-                        "Agent CLI '{}' not found in PATH - session may fail to start",
-                        agent
-                    );
-                }
-
-                let command = kild_config.get_agent_command(&agent).map_err(|e| {
-                    SessionError::ConfigError {
-                        message: e.to_string(),
-                    }
-                })?;
-                (agent, command)
-            }
+    // 2b. Guard: refuse to spawn if session already has a running agent.
+    // Bare shell opens bypass the guard — they don't spawn agents and can't corrupt
+    // agent_session_id. For daemon sessions, sync with the daemon first: if the daemon
+    // is unreachable (crashed) or the PTY has exited, the session is marked Stopped
+    // and the reopen is allowed. Terminal sessions trust stored status only.
+    let is_agent_open = !matches!(mode, OpenMode::BareShell);
+    if is_agent_open && session.status == SessionStatus::Active && session.has_agents() {
+        // For daemon sessions, verify the agent is truly running before refusing.
+        // A stale-active session (daemon PTY died) should be allowed to reopen.
+        //
+        // sync_daemon_session_status returns true when it changed status to Stopped
+        // (i.e., session was stale). Negate: truly_active = daemon confirmed still running.
+        let truly_active = if session
+            .latest_agent()
+            .and_then(|a| a.daemon_session_id())
+            .is_some()
+        {
+            !super::list::sync_daemon_session_status(&mut session)
+        } else {
+            // Non-daemon (terminal) sessions: trust the stored status.
+            // Terminal sessions have no reliable liveness check.
+            info!(
+                event = "core.session.open_terminal_liveness_skipped",
+                branch = name,
+                "Terminal session has no daemon session ID — trusting stored Active status"
+            );
+            true
         };
+
+        if truly_active {
+            warn!(
+                event = "core.session.open_rejected_already_active",
+                branch = name,
+                agent_count = session.agent_count(),
+                "Session already has running agents — refusing duplicate spawn"
+            );
+            return Err(SessionError::AlreadyActive {
+                name: name.to_string(),
+            });
+        }
+
+        // Session was stale-active — daemon sync already persisted Stopped status
+        // via patch_session_json_fields(). No additional save needed here.
+        info!(
+            event = "core.session.open_stale_active_synced",
+            branch = name,
+            session_id = %session.id,
+            "Stale-active session synced to Stopped, proceeding with open"
+        );
+    }
+
+    // 3. Determine agent and command based on OpenMode
+    let is_bare_shell = !is_agent_open;
+    let (agent, agent_command) = match mode {
+        OpenMode::BareShell => {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+                let fallback = "/bin/sh".to_string();
+                warn!(
+                    event = "core.session.shell_env_missing",
+                    fallback = %fallback,
+                    "$SHELL not set, falling back to /bin/sh"
+                );
+                fallback
+            });
+            info!(event = "core.session.open_shell_selected", shell = %shell);
+            ("shell".to_string(), shell)
+        }
+        OpenMode::Agent(name) => {
+            info!(event = "core.session.open_agent_selected", agent = name);
+
+            // Warn if agent CLI is not available in PATH
+            if let Some(false) = agents::is_agent_available(name) {
+                warn!(
+                    event = "core.session.agent_not_available",
+                    agent = %name,
+                    session_id = %session.id,
+                    "Agent CLI '{}' not found in PATH - session may fail to start",
+                    name
+                );
+            }
+
+            let command =
+                kild_config
+                    .get_agent_command(name)
+                    .map_err(|e| SessionError::ConfigError {
+                        message: e.to_string(),
+                    })?;
+            (name.clone(), command)
+        }
+        OpenMode::DefaultAgent => {
+            // Use session's stored agent, but fall back to config default
+            // when the session was created with --no-agent (stored as "shell").
+            // "shell" is not a registered agent, so get_agent_command would fail.
+            let agent = if session.agent == "shell" {
+                let default = kild_config.agent.default.clone();
+                info!(
+                    event = "core.session.open_agent_fallback_to_config",
+                    stored_agent = "shell",
+                    config_default = %default,
+                    "Session was created with --no-agent, falling back to config default"
+                );
+                default
+            } else {
+                session.agent.clone()
+            };
+            info!(event = "core.session.open_agent_selected", agent = agent);
+
+            // Warn if agent CLI is not available in PATH
+            if let Some(false) = agents::is_agent_available(&agent) {
+                warn!(
+                    event = "core.session.agent_not_available",
+                    agent = %agent,
+                    session_id = %session.id,
+                    "Agent CLI '{}' not found in PATH - session may fail to start",
+                    agent
+                );
+            }
+
+            let command =
+                kild_config
+                    .get_agent_command(&agent)
+                    .map_err(|e| SessionError::ConfigError {
+                        message: e.to_string(),
+                    })?;
+            (agent, command)
+        }
+    };
 
     // 3b. Inject yolo flags into agent command
     let agent_command = if yolo && !is_bare_shell {
@@ -290,181 +320,58 @@ pub fn open_session(
         source = source
     );
 
-    let use_daemon = effective_runtime_mode == crate::state::types::RuntimeMode::Daemon;
+    let use_daemon = effective_runtime_mode == RuntimeMode::Daemon;
 
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let new_agent = if use_daemon {
-        // Auto-start daemon if not running (config.daemon.auto_start, default: true)
-        crate::daemon::ensure_daemon_running(&kild_config)?;
-
-        setup_codex_integration(&agent);
-        setup_opencode_integration(&agent, &session.worktree_path);
-        setup_claude_integration(&agent);
-
-        // Daemon path: create new daemon PTY (uses shared helper with create_session)
-        let (cmd, cmd_args, env_vars, use_login_shell) = build_daemon_create_request(
-            &agent_command,
-            &agent,
-            &session.id,
-            new_task_list_id.as_deref(),
-            &session.branch,
-        )?;
-
-        let daemon_request = crate::daemon::client::DaemonCreateRequest {
-            request_id: &spawn_id,
-            session_id: &spawn_id,
-            working_directory: &session.worktree_path,
-            command: &cmd,
-            args: &cmd_args,
-            env_vars: &env_vars,
-            rows: 24,
-            cols: 80,
-            use_login_shell,
-        };
-        let daemon_result =
-            crate::daemon::client::create_pty_session(&daemon_request).map_err(|e| {
-                SessionError::DaemonError {
-                    message: e.to_string(),
-                }
-            })?;
-
-        // Early exit detection: poll with exponential backoff until Running or Stopped.
-        // Fast-failing processes (bad resume session, missing binary, env issues)
-        // typically exit within 50ms of spawn. Exit early on Running confirmation.
-        // Worst-case window: 350ms (50+100+200) before falling through with None (assume alive).
-        let maybe_early_exit: Option<Option<i32>> = {
-            let mut result = None;
-            for delay_ms in [50u64, 100, 200] {
-                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                match crate::daemon::client::get_session_info(&daemon_result.daemon_session_id) {
-                    Ok(Some((kild_protocol::SessionStatus::Stopped, exit_code))) => {
-                        result = Some(exit_code);
-                        break;
-                    }
-                    Ok(Some((kild_protocol::SessionStatus::Running, _))) => break, // confirmed alive
-                    _ => {} // Creating or IPC error — keep polling
-                }
-            }
-            result
-        };
-
-        if let Some(exit_code) = maybe_early_exit {
-            let scrollback_tail =
-                match crate::daemon::client::read_scrollback(&daemon_result.daemon_session_id) {
-                    Ok(Some(bytes)) => {
-                        let text = String::from_utf8_lossy(&bytes);
-                        let lines: Vec<&str> = text.lines().collect();
-                        let start = lines.len().saturating_sub(20);
-                        lines[start..].join("\n")
-                    }
-                    Ok(None) => {
-                        warn!(
-                            event = "core.session.open_scrollback_empty",
-                            daemon_session_id = %daemon_result.daemon_session_id,
-                            "Daemon session exited early with empty scrollback"
-                        );
-                        String::new()
-                    }
-                    Err(e) => {
-                        warn!(
-                            event = "core.session.open_scrollback_read_failed",
-                            daemon_session_id = %daemon_result.daemon_session_id,
-                            error = %e,
-                            "Failed to read scrollback after early PTY exit"
-                        );
-                        String::new()
-                    }
-                };
-
-            if let Err(e) = crate::daemon::client::destroy_daemon_session(
-                &daemon_result.daemon_session_id,
-                true,
-            ) {
-                warn!(
-                    event = "core.session.open_daemon_cleanup_failed",
-                    daemon_session_id = %daemon_result.daemon_session_id,
-                    error = %e,
-                    "Failed to clean up daemon session after early exit"
-                );
-            }
-
-            return Err(SessionError::DaemonPtyExitedEarly {
-                exit_code,
-                scrollback_tail,
-            });
-        }
-
-        AgentProcess::new(
-            agent.clone(),
-            spawn_id,
-            None,
-            None,
-            None,
-            None,
-            None,
-            agent_command.clone(),
-            now.clone(),
-            Some(daemon_result.daemon_session_id),
-        )?
-    } else {
-        setup_codex_integration(&agent);
-        setup_opencode_integration(&agent, &session.worktree_path);
-        setup_claude_integration(&agent);
-
-        // Terminal path: spawn in external terminal
-        // Wrap with `env` to strip nesting-detection vars and inject agent env.
-        let terminal_command = {
-            let mut env_prefix: Vec<(String, String)> = Vec::new();
-            if let Some(ref tlid) = new_task_list_id {
-                env_prefix.extend(agents::resume::task_list_env_vars(&agent, tlid));
-            }
-            env_prefix.extend(agents::resume::codex_env_vars(&agent, &session.branch));
-            env_prefix.extend(agents::resume::claude_env_vars(&agent, &session.branch));
-            super::env_cleanup::build_env_command(&env_prefix, &agent_command)
-        };
-        debug!(
-            event = "core.session.terminal_command_constructed",
-            command = %terminal_command,
-        );
-        let spawn_result = terminal::handler::spawn_terminal(
-            &session.worktree_path,
-            &terminal_command,
-            &kild_config,
-            Some(&spawn_id),
-            Some(config.kild_dir()),
-        )
-        .map_err(|e| SessionError::TerminalError { source: e })?;
-
-        let (process_name, process_start_time) = capture_process_metadata(&spawn_result, "open");
-
-        let command = if spawn_result.command_executed.trim().is_empty() {
-            format!("{} (command not captured)", agent)
-        } else {
-            spawn_result.command_executed.clone()
-        };
-
-        AgentProcess::new(
-            agent.clone(),
-            spawn_id,
-            spawn_result.process_id,
-            process_name.clone(),
-            process_start_time,
-            Some(spawn_result.terminal_type.clone()),
-            spawn_result.terminal_window_id.clone(),
-            command,
-            now.clone(),
-            None,
-        )?
+    let spawn_params = AgentSpawnParams {
+        branch: &session.branch,
+        agent: &agent,
+        agent_command: &agent_command,
+        worktree_path: &session.worktree_path,
+        session_id: &session.id,
+        spawn_id: &spawn_id,
+        task_list_id: new_task_list_id.as_deref(),
+        project_id: &session.project_id,
+        kild_config: &kild_config,
+        rows,
+        cols,
     };
 
+    let new_agent = if use_daemon {
+        let agent_process = spawn_daemon_agent(&spawn_params)?;
+
+        // Open-only: deliver initial prompt after spawn.
+        // Fleet claude sessions skip PTY delivery — dropbox task.md + Claude inbox is more reliable.
+        if let Some(prompt) = initial_prompt {
+            deliver_initial_prompt_for_session(
+                &session.project_id,
+                &session.branch,
+                &agent,
+                agent_process.daemon_session_id(),
+                prompt,
+            );
+        }
+
+        agent_process
+    } else {
+        spawn_terminal_agent(&spawn_params)?
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
     session.status = SessionStatus::Active;
     session.last_activity = Some(now);
     session.add_agent(new_agent);
 
-    // Update agent session ID for resume support
-    if let Some(sid) = new_agent_session_id {
-        session.agent_session_id = Some(sid);
+    // Update agent session ID for resume support.
+    // Preserve the previous ID in history so the original conversation remains recoverable.
+    if let Some(sid) = new_agent_session_id
+        && session.rotate_agent_session_id(sid.clone())
+    {
+        warn!(
+            event = "core.session.agent_session_id_rotated",
+            branch = name,
+            new_id = %sid,
+            "Previous agent session ID moved to history — use --resume to continue an existing conversation"
+        );
     }
 
     // Update task list ID for task list persistence
@@ -473,14 +380,16 @@ pub fn open_session(
     }
 
     // Update runtime mode so future opens auto-detect correctly
-    let is_daemon = effective_runtime_mode == crate::state::types::RuntimeMode::Daemon;
+    let is_daemon = effective_runtime_mode == RuntimeMode::Daemon;
     session.runtime_mode = Some(effective_runtime_mode);
 
     // 6. Save session BEFORE spawning attach window so `kild attach` can find it
     persistence::save_session_to_file(&session, &config.sessions_dir())?;
 
-    // 7. Spawn attach window (best-effort) and update session with terminal info
-    if is_daemon {
+    // 7. Spawn attach window (best-effort) and update session with terminal info.
+    // Skipped when no_attach is set — for programmatic opens (e.g. brain reopening workers)
+    // where a Ghostty window popping up is undesirable.
+    if is_daemon && !no_attach {
         spawn_and_save_attach_window(&mut session, name, &kild_config, &config.sessions_dir())?;
     }
 
@@ -499,13 +408,10 @@ mod tests {
 
     #[test]
     fn test_open_session_not_found() {
-        let result = open_session(
-            "non-existent",
-            crate::state::types::OpenMode::DefaultAgent,
-            Some(crate::state::types::RuntimeMode::Terminal),
-            false,
-            false,
-        );
+        let request =
+            crate::sessions::types::OpenSessionRequest::new("non-existent", OpenMode::DefaultAgent)
+                .with_runtime_mode(Some(RuntimeMode::Terminal));
+        let result = open_session(&request);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), SessionError::NotFound { .. }));
     }
@@ -727,6 +633,7 @@ mod tests {
             10,
             None,
             None,
+            None,
             vec![agent],
             Some(session_id.clone()),
             None,
@@ -764,8 +671,6 @@ mod tests {
 
     #[test]
     fn test_resolve_runtime_mode_explicit_wins() {
-        use crate::state::types::RuntimeMode;
-
         let config = kild_config::KildConfig::default();
         let (mode, source) = resolve_effective_runtime_mode(
             Some(RuntimeMode::Daemon),
@@ -778,8 +683,6 @@ mod tests {
 
     #[test]
     fn test_resolve_runtime_mode_session_when_no_explicit() {
-        use crate::state::types::RuntimeMode;
-
         let config = kild_config::KildConfig::default();
         let (mode, source) =
             resolve_effective_runtime_mode(None, Some(RuntimeMode::Daemon), &config);
@@ -789,8 +692,6 @@ mod tests {
 
     #[test]
     fn test_resolve_runtime_mode_config_when_daemon_enabled() {
-        use crate::state::types::RuntimeMode;
-
         let mut config = kild_config::KildConfig::default();
         config.daemon.enabled = Some(true);
         let (mode, source) = resolve_effective_runtime_mode(None, None, &config);
@@ -800,8 +701,6 @@ mod tests {
 
     #[test]
     fn test_resolve_runtime_mode_default_terminal() {
-        use crate::state::types::RuntimeMode;
-
         let config = kild_config::KildConfig::default();
         let (mode, source) = resolve_effective_runtime_mode(None, None, &config);
         assert_eq!(mode, RuntimeMode::Terminal);
@@ -812,8 +711,6 @@ mod tests {
     /// each session's stored runtime_mode is respected.
     #[test]
     fn test_resolve_runtime_mode_none_explicit_with_daemon_session() {
-        use crate::state::types::RuntimeMode;
-
         let config = kild_config::KildConfig::default();
         // Simulates open --all (no flags): explicit=None, session has Daemon
         let (mode, source) =
@@ -831,8 +728,6 @@ mod tests {
     /// Regression test: explicit flags should override all sessions (open --all --daemon)
     #[test]
     fn test_resolve_runtime_mode_explicit_overrides_session_in_open_all() {
-        use crate::state::types::RuntimeMode;
-
         let config = kild_config::KildConfig::default();
         // open --all --daemon: explicit=Daemon should override session=Terminal
         let (mode, source) = resolve_effective_runtime_mode(
@@ -855,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_runtime_mode_persists_through_stop_reload_cycle() {
-        use crate::state::types::RuntimeMode;
+        use RuntimeMode;
         use std::fs;
 
         let temp_dir = std::env::temp_dir().join(format!(
@@ -880,6 +775,7 @@ mod tests {
             3000,
             3009,
             10,
+            None,
             None,
             None,
             vec![],
@@ -1110,6 +1006,261 @@ mod tests {
         assert_eq!(
             resolved, "gemini",
             "shell fallback must use the config's default, not a hardcoded value"
+        );
+    }
+
+    // --- agent_session_id_history tests (Bug #572) ---
+
+    /// Fresh open on a session with an existing agent_session_id should
+    /// preserve the old ID in history before overwriting.
+    #[test]
+    fn test_fresh_open_preserves_previous_session_id_in_history() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "kild_test_sid_history_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let sessions_dir = temp_dir.join("sessions");
+        let worktree_dir = temp_dir.join("worktree");
+        fs::create_dir_all(&sessions_dir).expect("create sessions dir");
+        fs::create_dir_all(&worktree_dir).expect("create worktree dir");
+
+        let original_sid = "aaaa0000-0000-0000-0000-000000000001".to_string();
+        let new_sid = "bbbb0000-0000-0000-0000-000000000002".to_string();
+
+        let mut session = Session::new(
+            "test-project_sid-history".into(),
+            "test-project".into(),
+            "sid-history".into(),
+            worktree_dir,
+            "claude".to_string(),
+            SessionStatus::Active,
+            chrono::Utc::now().to_rfc3339(),
+            3000,
+            3009,
+            10,
+            None,
+            None,
+            None,
+            vec![],
+            Some(original_sid.clone()),
+            None,
+            None,
+        );
+
+        assert!(session.rotate_agent_session_id(new_sid.clone()));
+
+        // Verify: new ID is active, old ID is in history
+        assert_eq!(session.agent_session_id, Some(new_sid));
+        assert_eq!(session.agent_session_id_history, vec![original_sid.clone()]);
+
+        // Verify history survives serialization round-trip
+        persistence::save_session_to_file(&session, &sessions_dir).expect("save");
+        let reloaded = persistence::find_session_by_name(&sessions_dir, "sid-history")
+            .expect("find")
+            .expect("exists");
+        assert_eq!(
+            reloaded.agent_session_id_history,
+            vec![original_sid],
+            "agent_session_id_history must survive save/load"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Resume (same ID) should NOT add a duplicate to history.
+    #[test]
+    fn test_resume_does_not_duplicate_session_id_in_history() {
+        let sid = "cccc0000-0000-0000-0000-000000000003".to_string();
+        let mut session = Session::new_for_test(
+            "no-dup",
+            std::env::temp_dir().join("kild_test_no_dup_worktree"),
+        );
+        session.agent_session_id = Some(sid.clone());
+
+        assert!(!session.rotate_agent_session_id(sid));
+        assert!(
+            session.agent_session_id_history.is_empty(),
+            "Resume with same ID must not add to history"
+        );
+    }
+
+    /// Multiple fresh opens should accumulate all previous IDs in order.
+    #[test]
+    fn test_multiple_fresh_opens_accumulate_history() {
+        let ids: Vec<String> = (1..=4)
+            .map(|i| format!("dddd0000-0000-0000-0000-00000000000{i}"))
+            .collect();
+
+        let mut session = Session::new_for_test(
+            "multi-open",
+            std::env::temp_dir().join("kild_test_multi_open_worktree"),
+        );
+        session.agent_session_id = Some(ids[0].clone());
+
+        for new_sid in &ids[1..] {
+            session.rotate_agent_session_id(new_sid.clone());
+        }
+
+        assert_eq!(session.agent_session_id, Some(ids[3].clone()));
+        assert_eq!(session.agent_session_id_history, ids[..3]);
+    }
+
+    /// Empty history serializes cleanly (skip_serializing_if = "Vec::is_empty").
+    #[test]
+    fn test_empty_history_not_serialized() {
+        let session = Session::new_for_test(
+            "no-history",
+            std::env::temp_dir().join("kild_test_no_history_worktree"),
+        );
+        let json = serde_json::to_string(&session).expect("serialize");
+        assert!(
+            !json.contains("agent_session_id_history"),
+            "Empty history should not appear in JSON"
+        );
+    }
+
+    /// Legacy session files without `agent_session_id_history` must deserialize
+    /// cleanly with an empty vec (backward compatibility via #[serde(default)]).
+    #[test]
+    fn test_legacy_session_without_history_deserializes_cleanly() {
+        let legacy_json = r#"{
+            "id": "test-proj_my-branch",
+            "project_id": "test-proj",
+            "branch": "my-branch",
+            "worktree_path": "/tmp/worktree",
+            "agent": "claude",
+            "status": "stopped",
+            "created_at": "2025-01-01T00:00:00Z",
+            "agent_session_id": "aaaa-0000"
+        }"#;
+        let session: Session =
+            serde_json::from_str(legacy_json).expect("legacy format must deserialize");
+        assert!(
+            session.agent_session_id_history.is_empty(),
+            "Legacy sessions without the field must deserialize with empty history"
+        );
+        assert_eq!(session.agent_session_id.as_deref(), Some("aaaa-0000"));
+    }
+
+    // --- Active session guard tests (Issue #599) ---
+
+    /// Guard entry condition: Active + has_agents triggers the guard check.
+    /// Does not cover the daemon liveness branch — that requires IPC infrastructure.
+    #[test]
+    fn open_guard_condition_fires_when_active_with_agents() {
+        let mut session = Session::new_for_test(
+            "guard-test",
+            std::env::temp_dir().join("kild_test_guard_worktree"),
+        );
+        session.status = SessionStatus::Active;
+
+        // No agents → guard should not trigger
+        assert!(
+            !(session.status == SessionStatus::Active && session.has_agents()),
+            "Active session without agents should not be blocked"
+        );
+
+        // Add an agent → guard should trigger
+        let agent = AgentProcess::new(
+            "claude".to_string(),
+            "test_guard-test_0".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "claude --session-id abc".to_string(),
+            chrono::Utc::now().to_rfc3339(),
+            Some("test_guard-test_0".to_string()),
+        )
+        .unwrap();
+        session.add_agent(agent);
+
+        assert!(
+            session.status == SessionStatus::Active && session.has_agents(),
+            "Active session with agents should be blocked"
+        );
+    }
+
+    /// Stopped sessions with agents are not blocked — the `&&` with Active short-circuits.
+    #[test]
+    fn open_guard_allows_stopped_session_with_agents() {
+        let mut session = Session::new_for_test(
+            "stopped-test",
+            std::env::temp_dir().join("kild_test_stopped_worktree"),
+        );
+        session.status = SessionStatus::Stopped;
+
+        // Add an agent to prove the guard checks status, not just agents vec
+        let agent = AgentProcess::new(
+            "claude".to_string(),
+            "test_stopped-test_0".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "claude --session-id abc".to_string(),
+            chrono::Utc::now().to_rfc3339(),
+            Some("test_stopped-test_0".to_string()),
+        )
+        .unwrap();
+        session.add_agent(agent);
+
+        assert!(
+            session.has_agents(),
+            "Session should have agents for this test"
+        );
+        assert!(
+            !(session.status == SessionStatus::Active && session.has_agents()),
+            "Stopped session with agents should never be blocked"
+        );
+    }
+
+    /// Guard condition with BareShell bypass: agent opens on Active sessions with
+    /// agents are blocked, but bare shell opens bypass the guard entirely.
+    #[test]
+    fn open_guard_bare_shell_bypasses_active_check() {
+        let mut session = Session::new_for_test(
+            "bare-shell-test",
+            std::env::temp_dir().join("kild_test_bare_shell_worktree"),
+        );
+        session.status = SessionStatus::Active;
+
+        let agent = AgentProcess::new(
+            "claude".to_string(),
+            "test_bare-shell-test_0".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "claude --session-id abc".to_string(),
+            chrono::Utc::now().to_rfc3339(),
+            Some("test_bare-shell-test_0".to_string()),
+        )
+        .unwrap();
+        session.add_agent(agent);
+
+        // Agent open on active session with agents → guard fires
+        let is_agent_open = !matches!(OpenMode::DefaultAgent, OpenMode::BareShell);
+        assert!(
+            is_agent_open && session.status == SessionStatus::Active && session.has_agents(),
+            "Agent open should be blocked"
+        );
+
+        // Bare shell on same session → guard bypassed
+        let is_agent_open = !matches!(OpenMode::BareShell, OpenMode::BareShell);
+        assert!(
+            !(is_agent_open && session.status == SessionStatus::Active && session.has_agents()),
+            "Bare shell open should bypass guard"
         );
     }
 }

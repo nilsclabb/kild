@@ -73,6 +73,7 @@ hex = "0.4"
 # Internal workspace dependencies
 kild-config = { path = "crates/kild-config" }
 kild-core = { path = "crates/kild-core" }
+kild-git = { path = "crates/kild-git" }
 kild-daemon = { path = "crates/kild-daemon" }
 kild-paths = { path = "crates/kild-paths" }
 kild-peek-core = { path = "crates/kild-peek-core" }
@@ -91,3 +92,4 @@ owo-colors = { version = "4", features = ["supports-colors"] }
 
 # Dev/test dependencies
 temp-env = "0.3"
+paste = "1"

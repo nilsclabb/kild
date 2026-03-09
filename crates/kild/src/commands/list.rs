@@ -79,12 +79,16 @@ pub(crate) fn handle_list_command(matches: &ArgMatches) -> Result<(), Box<dyn st
                         let terminal_type =
                             latest_agent.and_then(|a| a.terminal_type().map(|t| t.to_string()));
 
-                        let worktree_status_ref =
-                            &git_stats.as_ref().and_then(|g| g.worktree_status.clone());
+                        let has_unpushed = git_stats
+                            .as_ref()
+                            .and_then(|g| g.worktree_status.as_ref())
+                            .is_some_and(|ws| ws.has_unpushed());
                         let merge_readiness = branch_health.as_ref().map(|h| {
                             kild_core::MergeReadiness::compute(
-                                h,
-                                worktree_status_ref,
+                                h.conflict_status.is_clean(),
+                                h.drift.behind,
+                                h.has_remote,
+                                has_unpushed,
                                 pr_info.as_ref(),
                             )
                         });
@@ -119,11 +123,11 @@ pub(crate) fn handle_list_command(matches: &ArgMatches) -> Result<(), Box<dyn st
             } else {
                 println!("{}", color::bold("Active kilds:"));
                 // Read sidecar statuses for table display
-                let statuses: Vec<Option<kild_core::sessions::types::AgentStatusInfo>> = sessions
+                let statuses: Vec<Option<kild_core::sessions::types::AgentStatusRecord>> = sessions
                     .iter()
                     .map(|s| session_ops::read_agent_status(&s.id))
                     .collect();
-                let pr_infos: Vec<Option<kild_core::PrInfo>> = sessions
+                let pr_infos: Vec<Option<kild_core::PullRequest>> = sessions
                     .iter()
                     .map(|s| session_ops::read_pr_info(&s.id))
                     .collect();

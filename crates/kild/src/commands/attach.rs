@@ -18,7 +18,7 @@ pub(crate) fn handle_attach_command(
     info!(event = "cli.attach_started", branch = branch);
 
     // 1. Look up session to get daemon_session_id
-    let session = helpers::require_session(branch, "cli.attach_failed")?;
+    let mut session = helpers::require_session(branch, "cli.attach_failed")?;
 
     // If --pane is specified, look up that pane's daemon session ID
     let daemon_session_id = if let Some(pane_id) = matches.get_one::<String>("pane") {
@@ -27,10 +27,19 @@ pub(crate) fn handle_attach_command(
         match session.latest_agent().and_then(|a| a.daemon_session_id()) {
             Some(id) => id.to_string(),
             None => {
-                let msg = format!(
-                    "'{}' is not daemon-managed. Use 'kild focus {}' for terminal sessions.",
-                    branch, branch
-                );
+                // Distinguish stopped daemon sessions from non-daemon terminal sessions.
+                let is_daemon = session.runtime_mode == Some(kild_core::RuntimeMode::Daemon);
+                let msg = if is_daemon {
+                    format!(
+                        "'{}' is stopped. Use 'kild open {}' to reopen it.",
+                        branch, branch
+                    )
+                } else {
+                    format!(
+                        "'{}' is not daemon-managed. Use 'kild focus {}' for terminal sessions.",
+                        branch, branch
+                    )
+                };
                 eprintln!("{}", msg);
                 error!(
                     event = "cli.attach_failed",
@@ -42,13 +51,63 @@ pub(crate) fn handle_attach_command(
         }
     };
 
+    // 2. If session is a running daemon session with no terminal window (headless),
+    //    spawn a new attach window instead of connecting from the current terminal.
+    //    Skip when --pane is specified — pane attach always uses direct connection
+    //    since spawn_attach_window connects to the leader, not the teammate pane.
+    let is_headless = matches.get_one::<String>("pane").is_none()
+        && session.runtime_mode == Some(kild_core::RuntimeMode::Daemon)
+        && session
+            .latest_agent()
+            .is_some_and(|a| a.terminal_window_id().is_none());
+
+    if is_headless {
+        info!(
+            event = "cli.attach_spawning_window",
+            branch = branch,
+            daemon_session_id = daemon_session_id.as_str()
+        );
+
+        let kild_config = helpers::load_config_with_warning();
+        let sessions_dir = kild_config::Config::new().sessions_dir();
+
+        match kild_core::sessions::daemon_helpers::spawn_and_save_attach_window(
+            &mut session,
+            branch,
+            &kild_config,
+            &sessions_dir,
+        ) {
+            Ok(true) => {
+                info!(event = "cli.attach_window_spawned", branch = branch);
+                return Ok(());
+            }
+            Ok(false) => {
+                // Terminal backend returned no window ID (best-effort), fall through to direct attach
+                warn!(
+                    event = "cli.attach_window_spawn_failed",
+                    branch = branch,
+                    "Could not spawn attach window, falling back to direct attach"
+                );
+            }
+            Err(e) => {
+                // Session save failed after window spawn, fall through to direct attach
+                warn!(
+                    event = "cli.attach_window_save_failed",
+                    branch = branch,
+                    error = %e,
+                    "Could not save attach window info, falling back to direct attach"
+                );
+            }
+        }
+    }
+
     info!(
         event = "cli.attach_connecting",
         branch = branch,
         daemon_session_id = daemon_session_id.as_str()
     );
 
-    // 2. Connect to daemon and attach
+    // 3. Connect to daemon and attach from the current terminal
     if let Err(e) = attach_to_daemon_session(&daemon_session_id, branch) {
         eprintln!("{}", e);
         error!(event = "cli.attach_failed", branch = branch, error = %e);

@@ -3,7 +3,6 @@
 //! Delegates JSONL framing to `kild_protocol::IpcConnection`.
 //! This module provides domain-specific request helpers and error mapping.
 
-use std::cell::RefCell;
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,25 +11,17 @@ use kild_protocol::{
 };
 use tracing::{debug, info, warn};
 
-// Intentionally duplicated from kild-tmux-shim/src/ipc.rs (see #517).
-// Cannot consolidate: kild-protocol is kept lean (no tracing dep), and
-// kild-core is too heavy to add as a shim dependency.
-// If liveness or timeout logic changes, update both files.
-thread_local! {
-    static CACHED_CONNECTION: RefCell<Option<IpcConnection>> = const { RefCell::new(None) };
-}
-
-/// Get a connection to the daemon, reusing a cached one if available.
+/// Take a connection to the daemon from the pool, or create a fresh one.
 ///
-/// Uses thread-local storage to avoid lock contention. Each thread maintains
-/// its own connection — for single-threaded CLI commands, this means one
-/// connection is reused across sequential operations within the same invocation.
+/// Uses `kild_protocol::pool` for thread-local connection caching. Each thread
+/// maintains its own connection — for single-threaded CLI commands, this means
+/// one connection is reused across sequential operations within the same invocation.
 ///
 /// When `remote_host` is configured (via CLI override or config file), connects
 /// via TCP/TLS instead of Unix socket. TLS connections are never cached —
 /// see `get_tls_connection()` for rationale.
 ///
-/// The connection is taken from the cache (exclusive ownership) and must be
+/// The connection is taken from the pool (exclusive ownership) and must be
 /// returned with `return_connection()` after successful use.
 fn get_connection() -> Result<IpcConnection, DaemonClientError> {
     // CLI --remote override takes precedence over config file.
@@ -61,20 +52,13 @@ fn get_connection() -> Result<IpcConnection, DaemonClientError> {
     }
 
     let socket_path = crate::daemon::socket_path();
-
-    CACHED_CONNECTION.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        if let Some(conn) = cached.take() {
-            if conn.is_alive() {
-                debug!(event = "core.daemon.connection_reused");
-                return Ok(conn);
-            }
-            debug!(event = "core.daemon.connection_stale");
-        }
-        let conn = IpcConnection::connect(&socket_path)?;
+    let (conn, reused) = kild_protocol::pool::take(&socket_path)?;
+    if reused {
+        debug!(event = "core.daemon.connection_reused");
+    } else {
         debug!(event = "core.daemon.connection_created");
-        Ok(conn)
-    })
+    }
+    Ok(conn)
 }
 
 /// Create a fresh TLS connection to a remote daemon.
@@ -100,18 +84,16 @@ fn get_tls_connection(
     IpcConnection::connect_tls(addr, verifier).map_err(Into::into)
 }
 
-/// Return a connection to the cache for reuse by the next call.
+/// Return a connection to the pool for reuse by the next call.
 ///
-/// Re-validates liveness before caching to prevent storing broken connections.
+/// Delegates to `kild_protocol::pool::release` which re-validates liveness
+/// before caching.
 fn return_connection(conn: IpcConnection) {
-    if !conn.is_alive() {
-        debug!(event = "core.daemon.connection_dropped_on_return");
-        return;
-    }
-    CACHED_CONNECTION.with(|cell| {
+    if kild_protocol::pool::release(conn) {
         debug!(event = "core.daemon.connection_cached");
-        *cell.borrow_mut() = Some(conn);
-    });
+    } else {
+        debug!(event = "core.daemon.connection_dropped_on_return");
+    }
 }
 
 use crate::errors::KildError;
@@ -429,7 +411,7 @@ pub fn get_session_status(
                 "Unexpected response type from daemon"
             );
             Err(DaemonClientError::ProtocolError {
-                message: "Expected SessionInfo response".to_string(),
+                message: "Expected session_info response".to_string(),
             })
         }
         Err(IpcError::DaemonError { ref code, .. }) if *code == ErrorCode::SessionNotFound => {
@@ -486,7 +468,7 @@ pub fn get_session_info(
                 "Unexpected response type from daemon"
             );
             Err(DaemonClientError::ProtocolError {
-                message: "Expected SessionInfo response".to_string(),
+                message: "Expected session_info response".to_string(),
             })
         }
         Err(IpcError::DaemonError { ref code, .. }) if *code == ErrorCode::SessionNotFound => {
@@ -496,6 +478,62 @@ pub fn get_session_info(
         Err(e) => {
             warn!(
                 event = "core.daemon.get_session_info_failed",
+                daemon_session_id = daemon_session_id,
+                error = %e,
+            );
+            Err(e.into())
+        }
+    }
+}
+
+/// Write data to a daemon-managed session's stdin.
+///
+/// Base64-encodes `data` and sends a `WriteStdin` IPC message.
+/// Returns after the daemon sends `Ack`.
+pub fn write_stdin(daemon_session_id: &str, data: &[u8]) -> Result<(), DaemonClientError> {
+    use base64::Engine;
+
+    info!(
+        event = "core.daemon.write_stdin_started",
+        daemon_session_id = daemon_session_id,
+        bytes = data.len(),
+    );
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    let request = ClientMessage::WriteStdin {
+        id: format!("write-{}", daemon_session_id),
+        session_id: SessionId::new(daemon_session_id),
+        data: encoded,
+    };
+
+    let mut conn = get_connection()?;
+    match conn.send(&request) {
+        Ok(DaemonMessage::Ack { .. }) => {
+            return_connection(conn);
+            info!(
+                event = "core.daemon.write_stdin_completed",
+                daemon_session_id = daemon_session_id,
+            );
+            Ok(())
+        }
+        Ok(other) => {
+            warn!(
+                event = "core.daemon.write_stdin_unexpected_response",
+                daemon_session_id = daemon_session_id,
+                response = ?other,
+            );
+            return_connection(conn);
+            Err(DaemonClientError::ProtocolError {
+                message: "Expected Ack response for WriteStdin".to_string(),
+            })
+        }
+        Err(IpcError::DaemonError { code, message }) => {
+            return_connection(conn);
+            Err(DaemonClientError::DaemonError { code, message })
+        }
+        Err(e) => {
+            warn!(
+                event = "core.daemon.write_stdin_failed",
                 daemon_session_id = daemon_session_id,
                 error = %e,
             );
@@ -563,7 +601,8 @@ pub fn read_scrollback(daemon_session_id: &str) -> Result<Option<Vec<u8>>, Daemo
 ///
 /// Returns all sessions from the daemon. The caller can filter by prefix
 /// to find sessions belonging to a specific kild (e.g., UI-created shells).
-pub fn list_daemon_sessions() -> Result<Vec<kild_protocol::SessionInfo>, DaemonClientError> {
+pub fn list_daemon_sessions() -> Result<Vec<kild_protocol::DaemonSessionStatus>, DaemonClientError>
+{
     debug!(event = "core.daemon.list_sessions_started");
 
     let request = ClientMessage::ListSessions {

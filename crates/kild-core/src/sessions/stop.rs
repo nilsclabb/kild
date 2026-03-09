@@ -1,6 +1,7 @@
 use tracing::{error, info, warn};
 
 use kild_paths::KildPaths;
+use kild_protocol::RuntimeMode;
 
 use crate::sessions::{errors::SessionError, persistence, types::*};
 use crate::terminal;
@@ -40,7 +41,8 @@ pub fn stop_session(name: &str) -> Result<(), SessionError> {
         }
 
         // Iterate all tracked agents — branch on daemon vs terminal
-        let mut kill_errors: Vec<(u32, String)> = Vec::with_capacity(session.agent_count());
+        let mut daemon_errors: Vec<String> = Vec::new();
+        let mut kill_errors: Vec<(u32, String)> = Vec::new();
         for agent_proc in session.agents() {
             if let Some(daemon_sid) = agent_proc.daemon_session_id() {
                 // Daemon-managed: destroy daemon session state via IPC.
@@ -59,7 +61,20 @@ pub fn stop_session(name: &str) -> Result<(), SessionError> {
                         daemon_session_id = daemon_sid,
                         error = %e
                     );
-                    kill_errors.push((0, e.to_string()));
+                    daemon_errors.push(e.to_string());
+                }
+
+                // Close the attach terminal window so it doesn't linger showing
+                // "failed to launch" after the PTY is gone.
+                if let (Some(terminal_type), Some(window_id)) =
+                    (agent_proc.terminal_type(), agent_proc.terminal_window_id())
+                {
+                    info!(
+                        event = "core.session.stop_close_attach_window",
+                        terminal_type = ?terminal_type,
+                        agent = agent_proc.agent(),
+                    );
+                    terminal::handler::close_terminal(terminal_type, Some(window_id));
                 }
             } else {
                 // Terminal-managed: close window + kill process
@@ -105,6 +120,12 @@ pub fn stop_session(name: &str) -> Result<(), SessionError> {
             }
         }
 
+        // Report daemon errors first (they are not PID-related).
+        if !daemon_errors.is_empty() && kill_errors.is_empty() {
+            let message = daemon_errors.join("; ");
+            return Err(SessionError::DaemonError { message });
+        }
+
         if !kill_errors.is_empty() {
             for (pid, err) in &kill_errors {
                 error!(
@@ -114,7 +135,7 @@ pub fn stop_session(name: &str) -> Result<(), SessionError> {
                 );
             }
 
-            let error_count = kill_errors.len();
+            let error_count = kill_errors.len() + daemon_errors.len();
             let (first_pid, first_msg) = {
                 let (p, m) = kill_errors.first().unwrap();
                 (*p, m.clone())
@@ -128,10 +149,15 @@ pub fn stop_session(name: &str) -> Result<(), SessionError> {
                     .map(|(p, _)| p.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!(
+                let mut msg = format!(
                     "{} processes failed to stop (PIDs: {}). Kill them manually.",
-                    error_count, pids
-                )
+                    kill_errors.len(),
+                    pids
+                );
+                for de in &daemon_errors {
+                    msg.push_str(&format!("\nDaemon error: {}", de));
+                }
+                msg
             };
 
             return Err(SessionError::ProcessKillFailed {
@@ -142,7 +168,7 @@ pub fn stop_session(name: &str) -> Result<(), SessionError> {
     }
 
     // 3. Delete PID files so next open() won't read stale PIDs (best-effort)
-    super::destroy::cleanup_session_pid_files(&session, config.kild_dir(), "stop");
+    crate::process::cleanup_pid_files(&session.pid_keys(), config.kild_dir(), "stop");
 
     // 4. Backfill runtime_mode for sessions created before this field existed.
     // Infer from agents: if any agent has daemon_session_id, session was daemon-managed.
@@ -153,9 +179,9 @@ pub fn stop_session(name: &str) -> Result<(), SessionError> {
             .any(|a| a.daemon_session_id().is_some());
 
         let inferred_mode = if has_daemon_agent {
-            crate::state::types::RuntimeMode::Daemon
+            RuntimeMode::Daemon
         } else {
-            crate::state::types::RuntimeMode::Terminal
+            RuntimeMode::Terminal
         };
 
         session.runtime_mode = Some(inferred_mode);
@@ -275,7 +301,6 @@ mod tests {
 
     #[test]
     fn test_stop_infers_runtime_mode_daemon_from_agent() {
-        use crate::state::types::RuntimeMode;
         use std::fs;
 
         let unique_id = format!(
@@ -320,6 +345,7 @@ mod tests {
             3000,
             3009,
             10,
+            None,
             None,
             None,
             vec![agent],
@@ -367,8 +393,8 @@ mod tests {
 
     #[test]
     fn test_stop_infers_runtime_mode_terminal_when_no_daemon() {
-        use crate::state::types::RuntimeMode;
         use crate::terminal::types::TerminalType;
+
         use std::fs;
 
         let unique_id = format!(
@@ -415,6 +441,7 @@ mod tests {
             10,
             None,
             None,
+            None,
             vec![agent],
             None,
             None,
@@ -458,7 +485,6 @@ mod tests {
 
     #[test]
     fn test_stop_preserves_existing_runtime_mode() {
-        use crate::state::types::RuntimeMode;
         use std::fs;
 
         let unique_id = format!(
@@ -503,6 +529,7 @@ mod tests {
             3000,
             3009,
             10,
+            None,
             None,
             None,
             vec![agent],
@@ -585,6 +612,7 @@ mod tests {
             10,
             Some(chrono::Utc::now().to_rfc3339()),
             None,
+            None,
             vec![agent],
             None,
             None,
@@ -627,7 +655,8 @@ mod tests {
 
     #[test]
     fn test_stop_removes_agent_status_sidecar() {
-        use crate::sessions::types::{AgentStatus, AgentStatusInfo};
+        use crate::sessions::types::AgentStatusRecord;
+        use kild_protocol::AgentStatus;
         use std::fs;
 
         let unique_id = format!(
@@ -659,6 +688,7 @@ mod tests {
             10,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -667,7 +697,7 @@ mod tests {
         persistence::save_session_to_file(&session, &sessions_dir).expect("Failed to save");
 
         // Write agent status sidecar file
-        let status_info = AgentStatusInfo {
+        let status_info = AgentStatusRecord {
             status: AgentStatus::Working,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };

@@ -51,10 +51,19 @@ pub(crate) fn handle_status_command(
             latest_agent.and_then(|a| a.terminal_window_id().map(str::to_string));
         let terminal_type = latest_agent.and_then(|a| a.terminal_type().map(|t| t.to_string()));
 
-        let worktree_status_ref = &git_stats.as_ref().and_then(|g| g.worktree_status.clone());
-        let merge_readiness = branch_health
+        let has_unpushed = git_stats
             .as_ref()
-            .map(|h| kild_core::MergeReadiness::compute(h, worktree_status_ref, pr_info.as_ref()));
+            .and_then(|g| g.worktree_status.as_ref())
+            .is_some_and(|ws| ws.has_unpushed());
+        let merge_readiness = branch_health.as_ref().map(|h| {
+            kild_core::MergeReadiness::compute(
+                h.conflict_status.is_clean(),
+                h.drift.behind,
+                h.has_remote,
+                has_unpushed,
+                pr_info.as_ref(),
+            )
+        });
 
         let overlapping_files = compute_overlapping_files(&session, base_branch);
 
@@ -93,6 +102,9 @@ pub(crate) fn handle_status_command(
     rows.push(("Created:", session.created_at.clone()));
     if let Some(ref note) = session.note {
         rows.push(("Note:", note.clone()));
+    }
+    if let Some(issue) = session.issue {
+        rows.push(("Issue:", format!("#{}", issue)));
     }
     rows.push(("Worktree:", shorten_home_path(&session.worktree_path)));
 

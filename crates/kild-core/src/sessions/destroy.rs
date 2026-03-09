@@ -1,83 +1,12 @@
 use kild_paths::KildPaths;
 use tracing::{debug, error, info, warn};
 
+use crate::forge::types::PrCheckResult;
 use crate::git;
 use crate::git::get_worktree_status;
-use crate::process::{delete_pid_file, get_pid_file_path};
 use crate::sessions::{errors::SessionError, persistence, types::*};
 use crate::terminal;
 use kild_config::Config;
-
-/// Clean up PID files for a session (best-effort).
-///
-/// Handles both multi-agent sessions (per-agent spawn ID PID files) and
-/// legacy sessions (session-level PID file). Failures are logged at debug
-/// level since PID file cleanup is best-effort.
-pub(crate) fn cleanup_session_pid_files(
-    session: &Session,
-    kild_dir: &std::path::Path,
-    operation: &str,
-) {
-    if !session.has_agents() {
-        // Legacy session (pre-multi-agent) — attempt session-level PID file cleanup
-        warn!(
-            event = "core.session.pid_cleanup_no_agents",
-            session_id = %session.id,
-            operation = operation,
-            "Session has no tracked agents, attempting session-level PID file cleanup"
-        );
-        let pid_file = get_pid_file_path(kild_dir, &session.id);
-        match delete_pid_file(&pid_file) {
-            Ok(()) => {
-                debug!(
-                    event = "core.session.pid_file_cleaned",
-                    session_id = %session.id,
-                    operation = operation,
-                    pid_file = %pid_file.display()
-                );
-            }
-            Err(e) => {
-                debug!(
-                    event = "core.session.pid_file_cleanup_failed",
-                    session_id = %session.id,
-                    operation = operation,
-                    pid_file = %pid_file.display(),
-                    error = %e
-                );
-            }
-        }
-        return;
-    }
-
-    for agent_proc in session.agents() {
-        // Determine PID file key: use spawn_id if available, otherwise fall back to session ID
-        let pid_key = if agent_proc.spawn_id().is_empty() {
-            session.id.to_string() // Backward compat: old sessions without spawn_id
-        } else {
-            agent_proc.spawn_id().to_string()
-        };
-        let pid_file = get_pid_file_path(kild_dir, &pid_key);
-        match delete_pid_file(&pid_file) {
-            Ok(()) => {
-                debug!(
-                    event = "core.session.pid_file_cleaned",
-                    session_id = %session.id,
-                    operation = operation,
-                    pid_file = %pid_file.display()
-                );
-            }
-            Err(e) => {
-                debug!(
-                    event = "core.session.pid_file_cleanup_failed",
-                    session_id = %session.id,
-                    operation = operation,
-                    pid_file = %pid_file.display(),
-                    error = %e
-                );
-            }
-        }
-    }
-}
 
 /// Clean up Claude Code task list directory for a session.
 ///
@@ -251,11 +180,8 @@ pub fn destroy_session(name: &str, force: bool) -> Result<(), SessionError> {
                 );
             }
 
+            let &(first_pid, ref first_msg) = kill_errors.first().unwrap();
             let error_count = kill_errors.len();
-            let (first_pid, first_msg) = {
-                let (p, m) = kill_errors.first().unwrap();
-                (*p, m.clone())
-            };
 
             let message = if error_count == 1 {
                 format!(
@@ -343,141 +269,86 @@ pub fn destroy_session(name: &str, force: bool) -> Result<(), SessionError> {
     }
 
     // 3b. Clean up tmux shim state and destroy child shim panes
-    if let Ok(paths) = KildPaths::resolve() {
-        let shim_dir = paths.shim_session_dir(&session.id);
-        if shim_dir.exists() {
-            // Destroy any child shim panes that may still be running
-            let panes_path = paths.shim_panes_file(&session.id);
-            match std::fs::read_to_string(&panes_path) {
-                Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(registry) => {
-                        if let Some(panes) = registry.get("panes").and_then(|p| p.as_object()) {
-                            for (pane_id, entry) in panes {
-                                if pane_id == "%0" {
-                                    continue; // Skip the parent pane (already destroyed above)
-                                }
-                                if let Some(child_sid) =
-                                    entry.get("daemon_session_id").and_then(|s| s.as_str())
-                                {
-                                    info!(
-                                        event = "core.session.destroy_shim_child",
-                                        pane_id = pane_id,
-                                        daemon_session_id = child_sid
-                                    );
-                                    if let Err(e) = crate::daemon::client::destroy_daemon_session(
-                                        child_sid, true,
-                                    ) {
-                                        error!(
-                                            event = "core.session.destroy_shim_child_failed",
-                                            pane_id = pane_id,
-                                            daemon_session_id = child_sid,
-                                            error = %e,
-                                        );
-                                        eprintln!(
-                                            "Warning: Failed to destroy agent team PTY {}: {}",
-                                            pane_id, e
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            event = "core.session.shim_registry_parse_failed",
-                            session_id = %session.id,
-                            path = %panes_path.display(),
-                            error = %e,
-                        );
-                        eprintln!(
-                            "Warning: Could not parse agent team state at {} — child PTYs may be orphaned: {}",
-                            panes_path.display(),
-                            e
-                        );
-                    }
-                },
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    // No panes.json means no child panes to clean up
-                }
-                Err(e) => {
-                    error!(
-                        event = "core.session.shim_registry_read_failed",
-                        session_id = %session.id,
-                        path = %panes_path.display(),
-                        error = %e,
-                    );
-                    eprintln!(
-                        "Warning: Could not read agent team state at {} — child PTYs may be orphaned: {}",
-                        panes_path.display(),
-                        e
-                    );
-                }
-            }
-
-            if let Err(e) = std::fs::remove_dir_all(&shim_dir) {
-                error!(
-                    event = "core.session.shim_cleanup_failed",
-                    session_id = %session.id,
-                    path = %shim_dir.display(),
-                    error = %e,
-                );
-                eprintln!(
-                    "Warning: Failed to remove agent team state at {}: {}",
-                    shim_dir.display(),
-                    e
-                );
-            } else {
-                info!(
-                    event = "core.session.shim_cleanup_completed",
-                    session_id = %session.id
-                );
-            }
+    match KildPaths::resolve() {
+        Ok(paths) => super::shim_cleanup::cleanup_shim_panes(&paths, &session.id),
+        Err(e) => {
+            warn!(
+                event = "core.session.shim_cleanup_skipped",
+                session_id = %session.id,
+                error = %e,
+                "Could not resolve kild paths — skipping shim cleanup, child PTYs may be orphaned"
+            );
         }
-    } else {
-        warn!(
-            event = "core.session.shim_cleanup_skipped",
-            session_id = %session.id,
-            "HOME not set, skipping shim cleanup"
-        );
     }
 
     // 3c. Clean up Claude Code task list directory
-    if let Some(task_list_id) = &session.task_list_id
-        && let Some(home) = dirs::home_dir()
-    {
-        cleanup_task_list(&session.id, task_list_id, &home);
+    if let Some(task_list_id) = &session.task_list_id {
+        match dirs::home_dir() {
+            Some(home) => cleanup_task_list(&session.id, task_list_id, &home),
+            None => {
+                warn!(
+                    event = "core.session.task_list_cleanup_skipped",
+                    session_id = %session.id,
+                    task_list_id = task_list_id,
+                    "HOME not set — task list not cleaned up"
+                );
+            }
+        }
     }
+
+    // 3d. Clean up fleet dropbox directory
+    super::dropbox::cleanup_dropbox(&session.project_id, &session.branch);
+
+    // 3e. Clean up fleet inbox file and team config entry
+    super::fleet::remove_fleet_member(&session.branch);
 
     // 4. Resolve main repo path before worktree removal (needed for branch cleanup)
     let main_repo_path = git::removal::find_main_repo_root(&session.worktree_path);
 
     // 5. Remove git worktree
-    if force {
+    //
+    // Skipped for --main sessions: their worktree_path IS the project root.
+    // Calling remove_dir_all on it would delete the entire repository.
+    if session.use_main_worktree {
+        info!(
+            event = "core.session.destroy_worktree_skipped",
+            session_id = %session.id,
+            worktree_path = %session.worktree_path.display(),
+            reason = "main_worktree",
+        );
+    } else if force {
         info!(
             event = "core.session.destroy_worktree_force",
             worktree = %session.worktree_path.display()
         );
         git::removal::remove_worktree_force(&session.worktree_path)
             .map_err(|e| SessionError::GitError { source: e })?;
+        info!(
+            event = "core.session.destroy_worktree_removed",
+            session_id = %session.id,
+            worktree_path = %session.worktree_path.display()
+        );
     } else {
         git::removal::remove_worktree_by_path(&session.worktree_path)
             .map_err(|e| SessionError::GitError { source: e })?;
+        info!(
+            event = "core.session.destroy_worktree_removed",
+            session_id = %session.id,
+            worktree_path = %session.worktree_path.display()
+        );
     }
 
-    info!(
-        event = "core.session.destroy_worktree_removed",
-        session_id = %session.id,
-        worktree_path = %session.worktree_path.display()
-    );
-
     // 6. Delete local kild branch (best-effort, don't block destroy)
-    if let Some(repo_path) = &main_repo_path {
+    // Skipped for --main sessions: they don't create a kild/<branch> branch.
+    if !session.use_main_worktree
+        && let Some(repo_path) = &main_repo_path
+    {
         let kild_branch = git::naming::kild_branch_name(&session.branch);
         git::removal::delete_branch_if_exists(repo_path, &kild_branch);
     }
 
     // 7. Clean up PID files (best-effort, don't fail if missing)
-    cleanup_session_pid_files(&session, config.kild_dir(), "destroy");
+    crate::process::cleanup_pid_files(&session.pid_keys(), config.kild_dir(), "destroy");
 
     // 8. Remove session directory (includes kild.json, status sidecar, pr sidecar)
     persistence::remove_session_file(&config.sessions_dir(), &session.id)?;
@@ -500,29 +371,9 @@ pub fn destroy_session(name: &str, force: bool) -> Result<(), SessionError> {
 
 /// Check if the git repository at the given path has any remote configured.
 ///
-/// Uses git2 to enumerate remotes. Returns false on any error (graceful degradation).
+/// Returns false on any error (graceful degradation).
 pub fn has_remote_configured(worktree_path: &std::path::Path) -> bool {
-    match git2::Repository::open(worktree_path) {
-        Ok(repo) => match repo.remotes() {
-            Ok(remotes) => !remotes.is_empty(),
-            Err(e) => {
-                debug!(
-                    event = "core.session.remote_check_failed",
-                    path = %worktree_path.display(),
-                    error = %e
-                );
-                false
-            }
-        },
-        Err(e) => {
-            debug!(
-                event = "core.session.remote_check_repo_open_failed",
-                path = %worktree_path.display(),
-                error = %e
-            );
-            false
-        }
-    }
+    crate::git::has_any_remote(worktree_path)
 }
 
 /// Get safety information before destroying a kild.
@@ -546,9 +397,9 @@ pub fn has_remote_configured(worktree_path: &std::path::Path) -> bool {
 /// * `name` - Branch name or kild identifier (without the `kild/` prefix)
 ///
 /// # Returns
-/// * `Ok(DestroySafetyInfo)` - Safety information (always succeeds if session found)
+/// * `Ok(DestroySafety)` - Safety information (always succeeds if session found)
 /// * `Err(SessionError::NotFound)` - Session doesn't exist
-pub fn get_destroy_safety_info(name: &str) -> Result<DestroySafetyInfo, SessionError> {
+pub fn get_destroy_safety_info(name: &str) -> Result<DestroySafety, SessionError> {
     info!(event = "core.session.safety_check_started", name = name);
 
     let config = Config::new();
@@ -636,7 +487,7 @@ pub fn get_destroy_safety_info(name: &str) -> Result<DestroySafetyInfo, SessionE
         pr_status = ?pr_status
     );
 
-    let safety_info = DestroySafetyInfo {
+    let safety_info = DestroySafety {
         git_status,
         pr_status,
     };
@@ -676,10 +527,10 @@ mod tests {
 
     #[test]
     fn test_complete_blocks_on_uncommitted_via_safety_info() {
-        // Verify that DestroySafetyInfo with uncommitted changes would block complete.
+        // Verify that DestroySafety with uncommitted changes would block complete.
         use crate::git::types::WorktreeStatus;
 
-        let dirty = DestroySafetyInfo {
+        let dirty = DestroySafety {
             git_status: WorktreeStatus {
                 has_uncommitted_changes: true,
                 ..Default::default()
@@ -688,7 +539,7 @@ mod tests {
         };
         assert!(dirty.should_block());
 
-        let clean = DestroySafetyInfo {
+        let clean = DestroySafety {
             git_status: WorktreeStatus {
                 has_uncommitted_changes: false,
                 ..Default::default()
@@ -783,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_destroy_safety_info_default_does_not_block() {
-        let info = DestroySafetyInfo::default();
+        let info = DestroySafety::default();
         assert!(!info.should_block());
     }
 
@@ -791,7 +642,7 @@ mod tests {
     fn test_destroy_safety_info_fully_clean_no_warnings() {
         use crate::git::types::WorktreeStatus;
 
-        let info = DestroySafetyInfo {
+        let info = DestroySafety {
             git_status: WorktreeStatus {
                 has_uncommitted_changes: false,
                 unpushed_commit_count: 0,
@@ -810,7 +661,7 @@ mod tests {
     fn test_has_warnings_each_condition_independently() {
         use crate::git::types::WorktreeStatus;
 
-        let uncommitted = DestroySafetyInfo {
+        let uncommitted = DestroySafety {
             git_status: WorktreeStatus {
                 has_uncommitted_changes: true,
                 has_remote_branch: true,
@@ -820,7 +671,7 @@ mod tests {
         };
         assert!(uncommitted.has_warnings());
 
-        let unpushed = DestroySafetyInfo {
+        let unpushed = DestroySafety {
             git_status: WorktreeStatus {
                 unpushed_commit_count: 3,
                 has_remote_branch: true,
@@ -830,7 +681,7 @@ mod tests {
         };
         assert!(unpushed.has_warnings());
 
-        let no_remote = DestroySafetyInfo {
+        let no_remote = DestroySafety {
             git_status: WorktreeStatus {
                 has_remote_branch: false,
                 ..Default::default()
@@ -839,7 +690,7 @@ mod tests {
         };
         assert!(no_remote.has_warnings());
 
-        let no_pr = DestroySafetyInfo {
+        let no_pr = DestroySafety {
             git_status: WorktreeStatus {
                 has_remote_branch: true,
                 ..Default::default()
@@ -848,7 +699,7 @@ mod tests {
         };
         assert!(no_pr.has_warnings());
 
-        let status_failed = DestroySafetyInfo {
+        let status_failed = DestroySafety {
             git_status: WorktreeStatus {
                 status_check_failed: true,
                 has_remote_branch: true,
@@ -863,7 +714,7 @@ mod tests {
     fn test_warning_messages_severity_order() {
         use crate::git::types::WorktreeStatus;
 
-        let info = DestroySafetyInfo {
+        let info = DestroySafety {
             git_status: WorktreeStatus {
                 has_uncommitted_changes: true,
                 unpushed_commit_count: 2,

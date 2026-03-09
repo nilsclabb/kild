@@ -2,8 +2,15 @@ use crate::errors::KildError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    #[error("Session '{name}' already exists")]
+    #[error(
+        "Kild '{name}' already exists.\n  Resume: kild open {name}\n  Remove: kild destroy {name}"
+    )]
     AlreadyExists { name: String },
+
+    #[error(
+        "Kild '{name}' already has a running agent.\n  To view it:             kild attach {name}\n  To send a message:      kild inject {name} \"...\"\n  To stop and reopen:     kild stop {name} && kild open {name}"
+    )]
+    AlreadyActive { name: String },
 
     #[error("Session '{name}' not found")]
     NotFound { name: String },
@@ -77,6 +84,21 @@ pub enum SessionError {
     )]
     NoPrFound { name: String },
 
+    #[error(
+        "Cannot complete '{name}': PR is not open (state: {state}).\n   Use 'kild destroy {name}' to remove the kild without merging."
+    )]
+    PrNotOpen { name: String, state: String },
+
+    #[error(
+        "Cannot complete '{name}': CI checks are failing ({summary}).\n   Fix the failing checks, or use '--skip-ci' to bypass the CI check."
+    )]
+    CiFailing { name: String, summary: String },
+
+    #[error(
+        "Cannot complete '{name}': merge failed.\n   {message}\n   Resolve the issue and try again, or use 'kild destroy {name}' to discard."
+    )]
+    MergeFailed { name: String, message: String },
+
     #[error("Daemon error: {message}")]
     DaemonError { message: String },
 
@@ -120,6 +142,7 @@ impl KildError for SessionError {
     fn error_code(&self) -> &'static str {
         match self {
             SessionError::AlreadyExists { .. } => "SESSION_ALREADY_EXISTS",
+            SessionError::AlreadyActive { .. } => "SESSION_ALREADY_ACTIVE",
             SessionError::NotFound { .. } => "SESSION_NOT_FOUND",
             SessionError::WorktreeNotFound { .. } => "WORKTREE_NOT_FOUND",
             SessionError::InvalidName => "INVALID_SESSION_NAME",
@@ -139,6 +162,9 @@ impl KildError for SessionError {
             SessionError::ConfigError { .. } => "CONFIG_ERROR",
             SessionError::UncommittedChanges { .. } => "SESSION_UNCOMMITTED_CHANGES",
             SessionError::NoPrFound { .. } => "SESSION_NO_PR_FOUND",
+            SessionError::PrNotOpen { .. } => "SESSION_PR_NOT_OPEN",
+            SessionError::CiFailing { .. } => "SESSION_CI_FAILING",
+            SessionError::MergeFailed { .. } => "SESSION_MERGE_FAILED",
             SessionError::DaemonError { .. } => "DAEMON_ERROR",
             SessionError::DaemonPtyExitedEarly { .. } => "DAEMON_PTY_EXITED_EARLY",
             SessionError::DaemonAutoStartFailed { .. } => "DAEMON_AUTO_START_FAILED",
@@ -157,6 +183,7 @@ impl KildError for SessionError {
         matches!(
             self,
             SessionError::AlreadyExists { .. }
+                | SessionError::AlreadyActive { .. }
                 | SessionError::NotFound { .. }
                 | SessionError::WorktreeNotFound { .. }
                 | SessionError::InvalidName
@@ -170,6 +197,9 @@ impl KildError for SessionError {
                 | SessionError::ConfigError { .. }
                 | SessionError::UncommittedChanges { .. }
                 | SessionError::NoPrFound { .. }
+                | SessionError::PrNotOpen { .. }
+                | SessionError::CiFailing { .. }
+                | SessionError::MergeFailed { .. }
                 | SessionError::ResumeUnsupported { .. }
                 | SessionError::ResumeNoSessionId { .. }
                 | SessionError::NoTeammates { .. }
@@ -188,8 +218,24 @@ mod tests {
         let error = SessionError::AlreadyExists {
             name: "test".to_string(),
         };
-        assert_eq!(error.to_string(), "Session 'test' already exists");
+        let display = error.to_string();
+        assert!(display.contains("Kild 'test' already exists"));
+        assert!(display.contains("kild open test"));
+        assert!(display.contains("kild destroy test"));
         assert_eq!(error.error_code(), "SESSION_ALREADY_EXISTS");
+        assert!(error.is_user_error());
+    }
+
+    #[test]
+    fn already_active_error_includes_actionable_alternatives() {
+        let error = SessionError::AlreadyActive {
+            name: "feature-auth".to_string(),
+        };
+        assert!(error.to_string().contains("already has a running agent"));
+        assert!(error.to_string().contains("kild attach feature-auth"));
+        assert!(error.to_string().contains("kild inject feature-auth"));
+        assert!(error.to_string().contains("kild stop feature-auth"));
+        assert_eq!(error.error_code(), "SESSION_ALREADY_ACTIVE");
         assert!(error.is_user_error());
     }
 

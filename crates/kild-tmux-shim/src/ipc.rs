@@ -1,55 +1,38 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use base64::Engine;
 use kild_paths::KildPaths;
-use kild_protocol::{ClientMessage, DaemonMessage, IpcConnection, SessionId};
+use kild_protocol::{ClientMessage, DaemonMessage, ErrorCode, SessionId, SessionStatus};
 use tracing::{debug, warn};
 
 use crate::errors::ShimError;
 
-// Intentionally duplicated from kild-core/src/daemon/client.rs (see #517).
-// Cannot consolidate: kild-protocol is kept lean (no tracing dep), and
-// kild-core is too heavy to add as a shim dependency.
-// If liveness or timeout logic changes, update both files.
-thread_local! {
-    static CACHED_CONNECTION: RefCell<Option<IpcConnection>> = const { RefCell::new(None) };
-}
-
-/// Get a connection to the daemon, reusing a cached one if available.
+/// Take a connection from the pool, or create a fresh one.
 ///
-/// Uses thread-local storage so each thread maintains its own connection.
+/// Delegates to `kild_protocol::pool` for thread-local connection caching.
 /// Critical for `write_stdin()` which is called per-keystroke — avoids
 /// creating a new socket connection for every key press.
-fn get_or_connect() -> Result<IpcConnection, ShimError> {
-    CACHED_CONNECTION.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        if let Some(conn) = cached.take() {
-            if conn.is_alive() {
-                debug!(event = "shim.ipc.connection_reused");
-                return Ok(conn);
-            }
-            debug!(event = "shim.ipc.connection_stale");
-        }
-        let paths = KildPaths::resolve().map_err(|e| ShimError::state(e.to_string()))?;
-        let conn = IpcConnection::connect(&paths.daemon_socket())?;
+fn get_or_connect() -> Result<kild_protocol::IpcConnection, ShimError> {
+    let paths = KildPaths::resolve().map_err(|e| ShimError::state(e.to_string()))?;
+    let (conn, reused) = kild_protocol::pool::take(&paths.daemon_socket())?;
+    if reused {
+        debug!(event = "shim.ipc.connection_reused");
+    } else {
         debug!(event = "shim.ipc.connection_created");
-        Ok(conn)
-    })
+    }
+    Ok(conn)
 }
 
-/// Return a connection to the cache for reuse.
+/// Return a connection to the pool for reuse.
 ///
-/// Re-validates liveness before caching to prevent storing broken connections.
-fn return_conn(conn: IpcConnection) {
-    if !conn.is_alive() {
-        debug!(event = "shim.ipc.connection_dropped_on_return");
-        return;
-    }
-    CACHED_CONNECTION.with(|cell| {
+/// Delegates to `kild_protocol::pool::release` which re-validates liveness
+/// before caching.
+fn return_conn(conn: kild_protocol::IpcConnection) {
+    if kild_protocol::pool::release(conn) {
         debug!(event = "shim.ipc.connection_cached");
-        *cell.borrow_mut() = Some(conn);
-    });
+    } else {
+        debug!(event = "shim.ipc.connection_dropped_on_return");
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -217,6 +200,75 @@ pub fn read_scrollback(session_id: &str) -> Result<Vec<u8>, ShimError> {
                 error = %e,
             );
             Err(e.into())
+        }
+    }
+}
+
+/// Query session status and PID from the daemon.
+///
+/// Returns `(status, pty_pid, exit_code)`. On failure (daemon down, session not found),
+/// returns `(Stopped, None, None)` as a safe default — a missing session is effectively dead.
+pub fn get_session_status(session_id: &str) -> (SessionStatus, Option<u32>, Option<i32>) {
+    let request = ClientMessage::GetSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        session_id: SessionId::new(session_id),
+    };
+
+    let mut conn = match get_or_connect() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(
+                event = "shim.ipc.get_session_status_failed",
+                session_id = session_id,
+                error = %e,
+            );
+            return (SessionStatus::Stopped, None, None);
+        }
+    };
+
+    match conn.send(&request) {
+        Ok(DaemonMessage::SessionInfo { session, .. }) => {
+            let result = (session.status, session.pty_pid, session.exit_code);
+            return_conn(conn);
+            result
+        }
+        Ok(DaemonMessage::Error { code, message, .. }) => {
+            // SessionNotFound is expected (session cleaned up) — debug only
+            if matches!(code, ErrorCode::SessionNotFound) {
+                debug!(
+                    event = "shim.ipc.get_session_status_not_found",
+                    session_id = session_id,
+                );
+            } else {
+                warn!(
+                    event = "shim.ipc.get_session_status_failed",
+                    session_id = session_id,
+                    error_code = %code,
+                    error = %message,
+                );
+            }
+            return_conn(conn);
+            (SessionStatus::Stopped, None, None)
+        }
+        Ok(unexpected) => {
+            // Unexpected response type — log and return healthy connection
+            warn!(
+                event = "shim.ipc.get_session_status_failed",
+                session_id = session_id,
+                reason = "unexpected_response_type",
+                response = ?unexpected,
+            );
+            return_conn(conn);
+            (SessionStatus::Stopped, None, None)
+        }
+        Err(e) => {
+            // IPC error — connection is broken, don't return it
+            warn!(
+                event = "shim.ipc.get_session_status_failed",
+                session_id = session_id,
+                error = %e,
+            );
+            (SessionStatus::Stopped, None, None)
         }
     }
 }

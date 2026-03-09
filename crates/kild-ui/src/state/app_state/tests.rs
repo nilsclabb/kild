@@ -1,6 +1,6 @@
 use super::*;
 use kild_core::sessions::types::SessionStatus;
-use kild_core::{BranchName, Event, GitStatus, ProcessStatus, Session, SessionInfo};
+use kild_core::{BranchName, Event, GitStatus, ProcessStatus, Session, SessionSnapshot};
 use std::path::PathBuf;
 
 use crate::state::dialog::DialogState;
@@ -113,6 +113,7 @@ fn test_filtered_displays_no_active_project() {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -122,13 +123,13 @@ fn test_filtered_displays_no_active_project() {
 
     let mut state = AppState::test_new();
     state.sessions.set_displays(vec![
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("1", "project-a"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
             uncommitted_diff: None,
         },
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("2", "project-b"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
@@ -162,6 +163,7 @@ fn test_filtered_displays_with_active_project() {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -171,19 +173,19 @@ fn test_filtered_displays_with_active_project() {
 
     let mut state = AppState::test_new();
     state.sessions.set_displays(vec![
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("1", &project_id_a),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
             uncommitted_diff: None,
         },
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("2", &project_id_b),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
             uncommitted_diff: None,
         },
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("3", &project_id_a),
             process_status: ProcessStatus::Running,
             git_status: GitStatus::Unknown,
@@ -224,6 +226,7 @@ fn test_filtered_displays_returns_empty_when_no_matching_project() {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -232,7 +235,7 @@ fn test_filtered_displays_returns_empty_when_no_matching_project() {
     };
 
     let mut state = AppState::test_new();
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session("1", "other-project-hash"),
         process_status: ProcessStatus::Stopped,
         git_status: GitStatus::Unknown,
@@ -268,6 +271,7 @@ fn test_selected_kild_returns_none_when_kild_removed_after_refresh() {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -276,7 +280,7 @@ fn test_selected_kild_returns_none_when_kild_removed_after_refresh() {
     };
 
     let mut state = AppState::test_new();
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session("test-id"),
         process_status: ProcessStatus::Stopped,
         git_status: GitStatus::Unknown,
@@ -314,6 +318,7 @@ fn test_selected_kild_persists_after_refresh_when_kild_still_exists() {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -322,7 +327,7 @@ fn test_selected_kild_persists_after_refresh_when_kild_still_exists() {
     };
 
     let mut state = AppState::test_new();
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session("test-id"),
         process_status: ProcessStatus::Stopped,
         git_status: GitStatus::Unknown,
@@ -334,7 +339,7 @@ fn test_selected_kild_persists_after_refresh_when_kild_still_exists() {
     assert!(state.selected_kild().is_some());
 
     // Simulate refresh that keeps the same kild (new display list with same ID)
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session("test-id"),
         process_status: ProcessStatus::Running, // Status may change
         git_status: GitStatus::Dirty,           // Git status may change
@@ -378,6 +383,7 @@ fn test_destroy_should_clear_selection_when_selected_kild_destroyed() {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -387,13 +393,13 @@ fn test_destroy_should_clear_selection_when_selected_kild_destroyed() {
 
     let mut state = AppState::test_new();
     state.sessions.set_displays(vec![
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("id-1", "branch-1"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
             uncommitted_diff: None,
         },
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("id-2", "branch-2"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
@@ -439,6 +445,7 @@ fn test_destroy_preserves_selection_when_different_kild_destroyed() {
             0,
             None,
             None,
+            None,
             vec![],
             None,
             None,
@@ -448,13 +455,13 @@ fn test_destroy_preserves_selection_when_different_kild_destroyed() {
 
     let mut state = AppState::test_new();
     state.sessions.set_displays(vec![
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("id-1", "branch-1"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
             uncommitted_diff: None,
         },
-        SessionInfo {
+        SessionSnapshot {
             session: make_session("id-2", "branch-2"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
@@ -501,6 +508,7 @@ fn make_session_for_event_test(id: &str, branch: &str) -> Session {
         0,
         None,
         None,
+        None,
         vec![],
         None,
         None,
@@ -535,7 +543,7 @@ fn test_apply_kild_created_closes_dialog_and_refreshes() {
 #[test]
 fn test_apply_kild_destroyed_clears_selection_when_selected() {
     let mut state = AppState::test_new();
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session_for_event_test("id-1", "branch-1"),
         process_status: ProcessStatus::Stopped,
         git_status: GitStatus::Unknown,
@@ -556,13 +564,13 @@ fn test_apply_kild_destroyed_clears_selection_when_selected() {
 fn test_apply_kild_destroyed_preserves_selection_when_other() {
     let mut state = AppState::test_new();
     state.sessions.set_displays(vec![
-        SessionInfo {
+        SessionSnapshot {
             session: make_session_for_event_test("id-1", "branch-1"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
             uncommitted_diff: None,
         },
-        SessionInfo {
+        SessionSnapshot {
             session: make_session_for_event_test("id-2", "branch-2"),
             process_status: ProcessStatus::Stopped,
             git_status: GitStatus::Unknown,
@@ -583,7 +591,7 @@ fn test_apply_kild_destroyed_preserves_selection_when_other() {
 #[test]
 fn test_apply_kild_opened_preserves_selection_and_dialog() {
     let mut state = AppState::test_new();
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session_for_event_test("id-1", "branch-1"),
         process_status: ProcessStatus::Stopped,
         git_status: GitStatus::Unknown,
@@ -605,7 +613,7 @@ fn test_apply_kild_opened_preserves_selection_and_dialog() {
 #[test]
 fn test_apply_kild_stopped_preserves_selection_and_dialog() {
     let mut state = AppState::test_new();
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session_for_event_test("id-1", "branch-1"),
         process_status: ProcessStatus::Running,
         git_status: GitStatus::Unknown,
@@ -626,7 +634,7 @@ fn test_apply_kild_stopped_preserves_selection_and_dialog() {
 #[test]
 fn test_apply_kild_completed_clears_selection_when_selected() {
     let mut state = AppState::test_new();
-    state.sessions.set_displays(vec![SessionInfo {
+    state.sessions.set_displays(vec![SessionSnapshot {
         session: make_session_for_event_test("id-1", "branch-1"),
         process_status: ProcessStatus::Stopped,
         git_status: GitStatus::Unknown,

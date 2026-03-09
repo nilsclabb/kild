@@ -150,7 +150,7 @@ fn is_ghostty_process(pid: u32) -> bool {
 #[cfg(target_os = "macos")]
 fn find_ghostty_native_window(
     window_id: &str,
-) -> Result<Option<crate::terminal::native::NativeWindowInfo>, TerminalError> {
+) -> Result<Option<crate::terminal::native::NativeWindow>, TerminalError> {
     use crate::terminal::native;
 
     debug!(
@@ -283,19 +283,14 @@ impl TerminalBackend for GhosttyBackend {
     }
 
     #[cfg(target_os = "macos")]
-    fn close_window(&self, window_id: Option<&str>) {
-        let Some(id) = crate::terminal::common::helpers::require_window_id(window_id, self.name())
-        else {
-            return;
-        };
-
+    fn close_window_by_id(&self, window_id: &str) {
         debug!(
             event = "core.terminal.close_ghostty_pkill",
-            window_title = %id
+            window_title = %window_id
         );
 
         // Escape regex metacharacters in the window title to avoid matching wrong processes
-        let escaped_id = escape_regex(id);
+        let escaped_id = escape_regex(window_id);
         // Kill the shell process that hosts our window. The window_id is embedded in the
         // sh -c command line via the ANSI title escape sequence (printf '\033]2;{id}\007').
         // We match just the window_id (not "Ghostty.*{id}") because the Ghostty app process
@@ -311,14 +306,14 @@ impl TerminalBackend for GhosttyBackend {
                 if output.status.success() {
                     debug!(
                         event = "core.terminal.close_ghostty_completed",
-                        window_title = %id
+                        window_title = %window_id
                     );
                 } else {
                     // Log at warn level so this appears in production logs
                     // This is expected if the terminal was manually closed by the user
                     warn!(
                         event = "core.terminal.close_ghostty_no_match",
-                        window_title = %id,
+                        window_title = %window_id,
                         message = "No matching Ghostty process found - terminal may have been closed manually"
                     );
                 }
@@ -327,7 +322,7 @@ impl TerminalBackend for GhosttyBackend {
                 // Log at warn level so this appears in production logs
                 warn!(
                     event = "core.terminal.close_ghostty_failed",
-                    window_title = %id,
+                    window_title = %window_id,
                     error = %e,
                     message = "pkill command failed - terminal window may remain open"
                 );
@@ -585,9 +580,9 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn test_native_window_info_fields() {
-        use crate::terminal::native::NativeWindowInfo;
-        let info = NativeWindowInfo {
+    fn test_native_window_fields() {
+        use crate::terminal::native::NativeWindow;
+        let info = NativeWindow {
             id: 12345,
             title: "test-window".to_string(),
             app_name: "Ghostty".to_string(),

@@ -141,7 +141,7 @@ impl std::fmt::Display for SessionStatus {
 /// `DaemonSession`. The daemon knows about PTYs and processes, not about
 /// git worktrees or agents — those concepts live in kild-core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
+pub struct DaemonSessionStatus {
     pub id: SessionId,
     pub working_directory: String,
     pub command: String,
@@ -155,13 +155,105 @@ pub struct SessionInfo {
     pub exit_code: Option<i32>,
 }
 
+/// Agent-reported activity status, written via `kild agent-status` command.
+///
+/// This is distinct from `ProcessStatus` (running/stopped) and `HealthStatus`
+/// (inferred from metrics). `AgentStatus` is explicitly reported by the agent
+/// via hooks, giving real-time insight into what the agent is doing.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentStatus {
+    Working,
+    Idle,
+    Waiting,
+    Done,
+    Error,
+}
+
+impl std::fmt::Display for AgentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Working => write!(f, "working"),
+            Self::Idle => write!(f, "idle"),
+            Self::Waiting => write!(f, "waiting"),
+            Self::Done => write!(f, "done"),
+            Self::Error => write!(f, "error"),
+        }
+    }
+}
+
+impl std::str::FromStr for AgentStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "working" => Ok(Self::Working),
+            "idle" => Ok(Self::Idle),
+            "waiting" => Ok(Self::Waiting),
+            "done" => Ok(Self::Done),
+            "error" => Ok(Self::Error),
+            other => Err(format!(
+                "Invalid agent status: '{}'. Valid: working, idle, waiting, done, error",
+                other
+            )),
+        }
+    }
+}
+
+/// How the agent process should be hosted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    #[serde(alias = "Terminal")]
+    /// Launch in an external terminal window (Ghostty, iTerm, etc.)
+    Terminal,
+    #[serde(alias = "Daemon")]
+    /// Launch in a daemon-owned PTY
+    Daemon,
+}
+
+/// What to launch when opening a kild terminal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum OpenMode {
+    /// Launch the session's default agent (from config).
+    DefaultAgent,
+    /// Launch a specific agent (overrides session config).
+    Agent(String),
+    /// Open a bare terminal with `$SHELL` instead of an agent.
+    BareShell,
+}
+
+/// What agent to launch when creating a kild.
+///
+/// Mirrors [`OpenMode`] for the create path. Determines whether the new kild
+/// gets an AI agent or a bare terminal shell.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AgentMode {
+    /// Use default agent from config.
+    DefaultAgent,
+    /// Use a specific agent (overrides config default).
+    Agent(String),
+    /// Open a bare terminal with `$SHELL` instead of an agent.
+    BareShell,
+}
+
+impl From<AgentMode> for OpenMode {
+    fn from(mode: AgentMode) -> Self {
+        match mode {
+            AgentMode::DefaultAgent => OpenMode::DefaultAgent,
+            AgentMode::Agent(name) => OpenMode::Agent(name),
+            AgentMode::BareShell => OpenMode::BareShell,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_session_info_serde() {
-        let info = SessionInfo {
+    fn test_daemon_session_status_serde() {
+        let info = DaemonSessionStatus {
             id: SessionId::new("myapp_feature-auth"),
             working_directory: "/tmp/worktrees/feature-auth".to_string(),
             command: "claude".to_string(),
@@ -173,7 +265,7 @@ mod tests {
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains(r#""status":"running""#));
-        let parsed: SessionInfo = serde_json::from_str(&json).unwrap();
+        let parsed: DaemonSessionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, info.id);
         assert_eq!(parsed.command, "claude");
         assert_eq!(parsed.status, SessionStatus::Running);
@@ -181,8 +273,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_info_optional_fields_omitted() {
-        let info = SessionInfo {
+    fn test_daemon_session_status_optional_fields_omitted() {
+        let info = DaemonSessionStatus {
             id: SessionId::new("test"),
             working_directory: "/tmp".to_string(),
             command: "bash".to_string(),
@@ -199,8 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_info_with_exit_code() {
-        let info = SessionInfo {
+    fn test_daemon_session_status_with_exit_code() {
+        let info = DaemonSessionStatus {
             id: SessionId::new("test"),
             working_directory: "/tmp".to_string(),
             command: "bash".to_string(),
@@ -215,8 +307,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_info_exit_code_roundtrip() {
-        let info = SessionInfo {
+    fn test_daemon_session_status_exit_code_roundtrip() {
+        let info = DaemonSessionStatus {
             id: SessionId::new("test"),
             working_directory: "/tmp".to_string(),
             command: "bash".to_string(),
@@ -227,7 +319,7 @@ mod tests {
             exit_code: Some(127),
         };
         let json = serde_json::to_string(&info).unwrap();
-        let parsed: SessionInfo = serde_json::from_str(&json).unwrap();
+        let parsed: DaemonSessionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.exit_code, Some(127));
     }
 
@@ -354,6 +446,125 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&SessionStatus::Creating).unwrap(),
             r#""creating""#
+        );
+    }
+
+    #[test]
+    fn test_agent_status_display() {
+        assert_eq!(AgentStatus::Working.to_string(), "working");
+        assert_eq!(AgentStatus::Idle.to_string(), "idle");
+        assert_eq!(AgentStatus::Waiting.to_string(), "waiting");
+        assert_eq!(AgentStatus::Done.to_string(), "done");
+        assert_eq!(AgentStatus::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn test_agent_status_from_str() {
+        assert_eq!(
+            "working".parse::<AgentStatus>().unwrap(),
+            AgentStatus::Working
+        );
+        assert_eq!("idle".parse::<AgentStatus>().unwrap(), AgentStatus::Idle);
+        assert_eq!(
+            "waiting".parse::<AgentStatus>().unwrap(),
+            AgentStatus::Waiting
+        );
+        assert_eq!("done".parse::<AgentStatus>().unwrap(), AgentStatus::Done);
+        assert_eq!("error".parse::<AgentStatus>().unwrap(), AgentStatus::Error);
+        assert!("invalid".parse::<AgentStatus>().is_err());
+    }
+
+    #[test]
+    fn test_agent_status_serde_roundtrip() {
+        for status in [
+            AgentStatus::Working,
+            AgentStatus::Idle,
+            AgentStatus::Waiting,
+            AgentStatus::Done,
+            AgentStatus::Error,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let parsed: AgentStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, status);
+        }
+    }
+
+    #[test]
+    fn test_runtime_mode_serde_roundtrip() {
+        for mode in [RuntimeMode::Terminal, RuntimeMode::Daemon] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let parsed: RuntimeMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, mode);
+        }
+    }
+
+    #[test]
+    fn test_runtime_mode_deserializes_old_pascal_case() {
+        assert_eq!(
+            serde_json::from_str::<RuntimeMode>(r#""Terminal""#).unwrap(),
+            RuntimeMode::Terminal
+        );
+        assert_eq!(
+            serde_json::from_str::<RuntimeMode>(r#""Daemon""#).unwrap(),
+            RuntimeMode::Daemon
+        );
+    }
+
+    #[test]
+    fn test_agent_mode_serde_roundtrip() {
+        let modes = vec![
+            AgentMode::DefaultAgent,
+            AgentMode::Agent("claude".to_string()),
+            AgentMode::BareShell,
+        ];
+        for mode in modes {
+            let json = serde_json::to_string(&mode).unwrap();
+            let roundtripped: AgentMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(mode, roundtripped);
+        }
+    }
+
+    #[test]
+    fn test_open_mode_serde_roundtrip() {
+        let modes = vec![
+            OpenMode::DefaultAgent,
+            OpenMode::Agent("claude".to_string()),
+            OpenMode::BareShell,
+        ];
+        for mode in modes {
+            let json = serde_json::to_string(&mode).unwrap();
+            let roundtripped: OpenMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(mode, roundtripped);
+        }
+    }
+
+    #[test]
+    fn test_agent_mode_into_open_mode_default() {
+        let open: OpenMode = AgentMode::DefaultAgent.into();
+        assert_eq!(open, OpenMode::DefaultAgent);
+    }
+
+    #[test]
+    fn test_agent_mode_into_open_mode_agent() {
+        let open: OpenMode = AgentMode::Agent("claude".to_string()).into();
+        assert_eq!(open, OpenMode::Agent("claude".to_string()));
+    }
+
+    #[test]
+    fn test_agent_mode_into_open_mode_bare_shell() {
+        let open: OpenMode = AgentMode::BareShell.into();
+        assert_eq!(open, OpenMode::BareShell);
+    }
+
+    #[test]
+    fn test_runtime_mode_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&RuntimeMode::Terminal).unwrap(),
+            r#""terminal""#
+        );
+        assert_eq!(
+            serde_json::to_string(&RuntimeMode::Daemon).unwrap(),
+            r#""daemon""#
         );
     }
 }

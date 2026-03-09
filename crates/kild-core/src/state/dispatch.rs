@@ -8,6 +8,7 @@ use crate::state::events::Event;
 use crate::state::store::Store;
 use crate::state::types::Command;
 use kild_config::KildConfig;
+use kild_protocol::RuntimeMode;
 
 /// Default Store implementation that routes commands to kild-core handlers.
 ///
@@ -47,7 +48,7 @@ impl Store for CoreStore {
                 // Terminal, but the user's config may have daemon.enabled = true.
                 // Without this, the UI always spawns external terminals.
                 let request = if self.config.is_daemon_enabled() {
-                    request.with_runtime_mode(crate::state::types::RuntimeMode::Daemon)
+                    request.with_runtime_mode(RuntimeMode::Daemon)
                 } else {
                     request
                 };
@@ -68,7 +69,12 @@ impl Store for CoreStore {
                 resume,
                 yolo,
             } => {
-                let session = session_ops::open_session(&branch, mode, runtime_mode, resume, yolo)?;
+                let request =
+                    crate::sessions::types::OpenSessionRequest::new(branch.to_string(), mode)
+                        .with_runtime_mode(runtime_mode)
+                        .with_resume(resume)
+                        .with_yolo(yolo);
+                let session = session_ops::open_session(&request)?;
                 Ok(vec![Event::KildOpened {
                     branch,
                     agent: session.agent,
@@ -79,7 +85,8 @@ impl Store for CoreStore {
                 Ok(vec![Event::KildStopped { branch }])
             }
             Command::CompleteKild { branch } => {
-                session_ops::complete_session(&branch)?;
+                let request = crate::sessions::types::CompleteRequest::new(&*branch);
+                session_ops::complete_session(&request)?;
                 Ok(vec![Event::KildCompleted { branch }])
             }
             Command::UpdateAgentStatus { branch, status } => {
@@ -250,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_create_request_with_project_path() {
-        use crate::state::types::AgentMode;
+        use kild_protocol::AgentMode;
         let request = CreateSessionRequest::with_project_path(
             "test-branch".to_string(),
             AgentMode::Agent("claude".to_string()),
@@ -265,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_create_request_without_project_path() {
-        use crate::state::types::AgentMode;
+        use kild_protocol::AgentMode;
         let request = CreateSessionRequest::new(
             "test-branch".to_string(),
             AgentMode::Agent("claude".to_string()),
@@ -279,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_create_request_defaults_to_terminal_mode() {
-        use crate::state::types::{AgentMode, RuntimeMode};
+        use kild_protocol::{AgentMode, RuntimeMode};
         let request = CreateSessionRequest::new("test".to_string(), AgentMode::DefaultAgent, None);
         assert_eq!(
             request.runtime_mode,
@@ -290,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_create_request_with_project_path_defaults_to_terminal_mode() {
-        use crate::state::types::{AgentMode, RuntimeMode};
+        use kild_protocol::{AgentMode, RuntimeMode};
         let request = CreateSessionRequest::with_project_path(
             "test".to_string(),
             AgentMode::DefaultAgent,
@@ -308,7 +315,7 @@ mod tests {
     /// default Terminal mode with Daemon mode.
     #[test]
     fn test_dispatch_create_applies_daemon_config() {
-        use crate::state::types::{AgentMode, RuntimeMode};
+        use kild_protocol::{AgentMode, RuntimeMode};
 
         let mut config = KildConfig::default();
         config.daemon.enabled = Some(true);
@@ -333,7 +340,7 @@ mod tests {
     /// leave the request's Terminal default untouched.
     #[test]
     fn test_dispatch_create_preserves_terminal_when_daemon_disabled() {
-        use crate::state::types::{AgentMode, RuntimeMode};
+        use kild_protocol::{AgentMode, RuntimeMode};
 
         let config = KildConfig::default();
         assert!(!config.is_daemon_enabled());
@@ -638,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_open_kild_not_found() {
-        use crate::state::types::{OpenMode, RuntimeMode};
+        use kild_protocol::{OpenMode, RuntimeMode};
         let mut store = CoreStore::new(KildConfig::default());
         let result = store.dispatch(Command::OpenKild {
             branch: "nonexistent-branch".into(),
@@ -655,7 +662,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_update_agent_status_not_found() {
-        use crate::sessions::types::AgentStatus;
+        use kild_protocol::AgentStatus;
         let mut store = CoreStore::new(KildConfig::default());
         let result = store.dispatch(Command::UpdateAgentStatus {
             branch: "nonexistent-branch".into(),

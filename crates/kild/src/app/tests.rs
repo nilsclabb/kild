@@ -190,6 +190,61 @@ fn test_cli_create_without_note() {
 }
 
 #[test]
+fn test_cli_create_with_issue() {
+    let app = build_cli();
+    let matches =
+        app.try_get_matches_from(vec!["kild", "create", "feature-branch", "--issue", "42"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let create_matches = matches.subcommand_matches("create").unwrap();
+    assert_eq!(create_matches.get_one::<u32>("issue").copied(), Some(42));
+}
+
+#[test]
+fn test_cli_create_with_issue_short_flag() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "create", "feature-branch", "-i", "7"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let create_matches = matches.subcommand_matches("create").unwrap();
+    assert_eq!(create_matches.get_one::<u32>("issue").copied(), Some(7));
+}
+
+#[test]
+fn test_cli_create_without_issue() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "create", "feature-branch"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let create_matches = matches.subcommand_matches("create").unwrap();
+    assert!(create_matches.get_one::<u32>("issue").is_none());
+}
+
+#[test]
+fn test_cli_create_issue_rejects_zero() {
+    let app = build_cli();
+    let matches =
+        app.try_get_matches_from(vec!["kild", "create", "feature-branch", "--issue", "0"]);
+    assert!(matches.is_err());
+}
+
+#[test]
+fn test_cli_create_issue_rejects_non_numeric() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec![
+        "kild",
+        "create",
+        "feature-branch",
+        "--issue",
+        "not-a-number",
+    ]);
+    assert!(matches.is_err());
+}
+
+#[test]
 fn test_cli_verbose_flag_short() {
     let app = build_cli();
     let matches = app.try_get_matches_from(vec!["kild", "-v", "list"]);
@@ -660,6 +715,37 @@ fn test_cli_stop_with_branch_no_all() {
 }
 
 #[test]
+fn test_cli_stop_force_flag() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec!["kild", "stop", "my-branch", "--force"])
+        .unwrap();
+    let stop_matches = matches.subcommand_matches("stop").unwrap();
+    assert!(stop_matches.get_flag("force"));
+    assert_eq!(
+        stop_matches.get_one::<String>("branch").unwrap(),
+        "my-branch"
+    );
+}
+
+#[test]
+fn test_cli_stop_force_short_flag() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec!["kild", "stop", "my-branch", "-f"])
+        .unwrap();
+    let stop_matches = matches.subcommand_matches("stop").unwrap();
+    assert!(stop_matches.get_flag("force"));
+}
+
+#[test]
+fn test_cli_stop_force_conflicts_with_all() {
+    let app = build_cli();
+    let result = app.try_get_matches_from(vec!["kild", "stop", "--all", "--force"]);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_cli_destroy_all_flag() {
     let app = build_cli();
     let matches = app.try_get_matches_from(vec!["kild", "destroy", "--all"]);
@@ -712,10 +798,63 @@ fn test_cli_complete_command() {
 }
 
 #[test]
-fn test_cli_complete_rejects_force_flag() {
+fn test_cli_complete_accepts_force_flag() {
     let app = build_cli();
-    // --force should not be accepted on complete (removed in #188)
-    let matches = app.try_get_matches_from(vec!["kild", "complete", "test-branch", "--force"]);
+    let matches = app
+        .try_get_matches_from(vec!["kild", "complete", "test-branch", "--force"])
+        .unwrap();
+    let complete_matches = matches.subcommand_matches("complete").unwrap();
+    assert!(complete_matches.get_flag("force"));
+}
+
+#[test]
+fn test_cli_complete_accepts_merge_strategy() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec![
+            "kild",
+            "complete",
+            "test-branch",
+            "--merge-strategy",
+            "rebase",
+        ])
+        .unwrap();
+    let complete_matches = matches.subcommand_matches("complete").unwrap();
+    assert_eq!(
+        complete_matches
+            .get_one::<String>("merge-strategy")
+            .unwrap(),
+        "rebase"
+    );
+}
+
+#[test]
+fn test_cli_complete_accepts_no_merge_and_dry_run() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec![
+            "kild",
+            "complete",
+            "test-branch",
+            "--no-merge",
+            "--dry-run",
+        ])
+        .unwrap();
+    let complete_matches = matches.subcommand_matches("complete").unwrap();
+    assert!(complete_matches.get_flag("no-merge"));
+    assert!(complete_matches.get_flag("dry-run"));
+}
+
+#[test]
+fn test_cli_complete_rejects_invalid_merge_strategy() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec![
+        "kild",
+        "complete",
+        "test-branch",
+        "--merge-strategy",
+        "invalid",
+    ]);
     assert!(matches.is_err());
 }
 
@@ -1692,4 +1831,248 @@ fn test_cli_attach_without_pane() {
         .unwrap();
     let sub = matches.subcommand_matches("attach").unwrap();
     assert!(sub.get_one::<String>("pane").is_none());
+}
+
+// --- inject command tests ---
+
+#[test]
+fn test_cli_inject_command() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec!["kild", "inject", "my-worker", "do the thing"])
+        .unwrap();
+    let sub = matches.subcommand_matches("inject").unwrap();
+    assert_eq!(sub.get_one::<String>("branch").unwrap(), "my-worker");
+    assert_eq!(sub.get_one::<String>("text").unwrap(), "do the thing");
+    assert!(!sub.get_flag("inbox"));
+}
+
+#[test]
+fn test_cli_inject_with_inbox_flag() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec!["kild", "inject", "my-worker", "msg", "--inbox"])
+        .unwrap();
+    let sub = matches.subcommand_matches("inject").unwrap();
+    assert!(sub.get_flag("inbox"));
+}
+
+#[test]
+fn test_cli_inject_requires_branch_and_text() {
+    let app = build_cli();
+    assert!(
+        app.try_get_matches_from(vec!["kild", "inject", "my-worker"])
+            .is_err()
+    );
+
+    let app = build_cli();
+    assert!(app.try_get_matches_from(vec!["kild", "inject"]).is_err());
+}
+
+// --- create --main flag ---
+
+#[test]
+fn test_cli_create_with_main_flag() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec!["kild", "create", "honryu", "--main"])
+        .unwrap();
+    let sub = matches.subcommand_matches("create").unwrap();
+    assert!(sub.get_flag("main"));
+}
+
+// --- open --no-attach flag ---
+
+#[test]
+fn test_cli_open_with_no_attach_flag() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec!["kild", "open", "my-branch", "--no-attach"])
+        .unwrap();
+    let sub = matches.subcommand_matches("open").unwrap();
+    assert!(sub.get_flag("no-attach"));
+}
+
+// --- --initial-prompt flag ---
+
+#[test]
+fn test_cli_create_with_initial_prompt() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec![
+            "kild",
+            "create",
+            "my-branch",
+            "--daemon",
+            "--initial-prompt",
+            "start with auth",
+        ])
+        .unwrap();
+    let sub = matches.subcommand_matches("create").unwrap();
+    assert_eq!(
+        sub.get_one::<String>("initial-prompt").unwrap(),
+        "start with auth"
+    );
+}
+
+#[test]
+fn test_cli_open_with_initial_prompt() {
+    let app = build_cli();
+    let matches = app
+        .try_get_matches_from(vec![
+            "kild",
+            "open",
+            "my-branch",
+            "--initial-prompt",
+            "next task: fix tests",
+        ])
+        .unwrap();
+    let sub = matches.subcommand_matches("open").unwrap();
+    assert_eq!(
+        sub.get_one::<String>("initial-prompt").unwrap(),
+        "next task: fix tests"
+    );
+}
+
+#[test]
+fn test_cli_create_initial_prompt_conflicts_with_no_daemon() {
+    let app = build_cli();
+    assert!(
+        app.try_get_matches_from(vec![
+            "kild",
+            "create",
+            "my-branch",
+            "--no-daemon",
+            "--initial-prompt",
+            "hello",
+        ])
+        .is_err()
+    );
+}
+
+// --- inbox command tests ---
+
+#[test]
+fn test_cli_inbox_command() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "test-branch"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let sub = matches.subcommand_matches("inbox").unwrap();
+    assert_eq!(sub.get_one::<String>("branch").unwrap(), "test-branch");
+    assert!(!sub.get_flag("json"));
+    assert!(!sub.get_flag("all"));
+    assert!(!sub.get_flag("task"));
+    assert!(!sub.get_flag("report"));
+    assert!(!sub.get_flag("status"));
+}
+
+#[test]
+fn test_cli_inbox_with_json() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--json"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let sub = matches.subcommand_matches("inbox").unwrap();
+    assert!(sub.get_flag("json"));
+}
+
+#[test]
+fn test_cli_inbox_all_flag() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "--all"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let sub = matches.subcommand_matches("inbox").unwrap();
+    assert!(sub.get_flag("all"));
+    assert!(sub.get_one::<String>("branch").is_none());
+}
+
+#[test]
+fn test_cli_inbox_all_conflicts_with_branch() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "--all", "some-branch"]);
+    assert!(matches.is_err());
+}
+
+#[test]
+fn test_cli_inbox_requires_branch_or_all() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox"]);
+    assert!(matches.is_err());
+}
+
+#[test]
+fn test_cli_inbox_task_flag() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--task"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let sub = matches.subcommand_matches("inbox").unwrap();
+    assert!(sub.get_flag("task"));
+}
+
+#[test]
+fn test_cli_inbox_report_flag() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--report"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let sub = matches.subcommand_matches("inbox").unwrap();
+    assert!(sub.get_flag("report"));
+}
+
+#[test]
+fn test_cli_inbox_status_flag() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--status"]);
+    assert!(matches.is_ok());
+
+    let matches = matches.unwrap();
+    let sub = matches.subcommand_matches("inbox").unwrap();
+    assert!(sub.get_flag("status"));
+}
+
+#[test]
+fn test_cli_inbox_task_conflicts_with_all() {
+    let app = build_cli();
+    let matches = app.try_get_matches_from(vec!["kild", "inbox", "--all", "--task"]);
+    assert!(matches.is_err());
+}
+
+#[test]
+fn test_cli_inbox_task_conflicts_with_report() {
+    let app = build_cli();
+    let matches =
+        app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--task", "--report"]);
+    assert!(matches.is_err());
+}
+
+#[test]
+fn test_cli_inbox_task_conflicts_with_json() {
+    let app = build_cli();
+    let matches =
+        app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--task", "--json"]);
+    assert!(matches.is_err());
+}
+
+#[test]
+fn test_cli_inbox_report_conflicts_with_json() {
+    let app = build_cli();
+    let matches =
+        app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--report", "--json"]);
+    assert!(matches.is_err());
+}
+
+#[test]
+fn test_cli_inbox_status_conflicts_with_json() {
+    let app = build_cli();
+    let matches =
+        app.try_get_matches_from(vec!["kild", "inbox", "test-branch", "--status", "--json"]);
+    assert!(matches.is_err());
 }

@@ -7,7 +7,8 @@ mod status;
 mod tests;
 
 pub use agent_process::AgentProcess;
-pub use request::{CreateSessionRequest, ValidatedRequest};
-pub use safety::{CompleteResult, DestroySafetyInfo, PrCheckResult};
+pub use kild_protocol::AgentStatus;
+pub use request::{CreateSessionRequest, OpenSessionRequest, ValidatedRequest};
+pub use safety::{CompleteRequest, CompleteResult, DestroySafety};
 pub use session::Session;
-pub use status::{AgentStatus, AgentStatusInfo, GitStatus, ProcessStatus, SessionStatus};
+pub use status::{AgentStatusRecord, GitStatus, ProcessStatus, SessionStatus};

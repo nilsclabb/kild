@@ -1,15 +1,32 @@
 //! GitHub forge backend implementation.
 
+use std::borrow::Cow;
 use std::path::Path;
 
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::forge::errors::ForgeError;
 use crate::forge::traits::ForgeBackend;
-use crate::forge::types::{CiStatus, PrCheckResult, PrInfo, PrState, ReviewStatus};
+use crate::forge::types::{
+    CiStatus, MergeStrategy, PrCheckResult, PrState, PullRequest, ReviewStatus,
+};
+use crate::git::naming::{KILD_BRANCH_PREFIX, kild_branch_name};
 
 /// GitHub forge backend using the `gh` CLI.
 pub struct GitHubBackend;
+
+/// Ensure the branch name has the `kild/` prefix for GitHub API queries.
+///
+/// KILD pushes branches as `kild/<branch>`, so `gh pr view` needs the full ref.
+/// Callers should always pass the full ref, but this normalizes defensively to
+/// prevent "no pull requests found" errors from short branch names.
+fn normalize_branch(branch: &str) -> Cow<'_, str> {
+    if branch.starts_with(KILD_BRANCH_PREFIX) {
+        Cow::Borrowed(branch)
+    } else {
+        Cow::Owned(kild_branch_name(branch))
+    }
+}
 
 impl ForgeBackend for GitHubBackend {
     fn name(&self) -> &'static str {
@@ -25,15 +42,16 @@ impl ForgeBackend for GitHubBackend {
     }
 
     fn is_pr_merged(&self, worktree_path: &Path, branch: &str) -> Result<bool, ForgeError> {
+        let branch = normalize_branch(branch);
         debug!(
             event = "core.forge.pr_merge_check_started",
-            branch = branch,
+            branch = %branch,
             worktree_path = %worktree_path.display()
         );
 
         let output = std::process::Command::new("gh")
             .current_dir(worktree_path)
-            .args(["pr", "view", branch, "--json", "state", "-q", ".state"])
+            .args(["pr", "view", &branch, "--json", "state", "-q", ".state"])
             .output();
 
         match output {
@@ -44,7 +62,7 @@ impl ForgeBackend for GitHubBackend {
                 let merged = state == "MERGED";
                 debug!(
                     event = "core.forge.pr_merge_check_completed",
-                    branch = branch,
+                    branch = %branch,
                     state = %state,
                     merged = merged
                 );
@@ -57,7 +75,7 @@ impl ForgeBackend for GitHubBackend {
                     || stderr.contains("Could not resolve")
                     || stderr.contains("no open pull requests")
                 {
-                    debug!(event = "core.forge.pr_merge_check_no_pr", branch = branch,);
+                    debug!(event = "core.forge.pr_merge_check_no_pr", branch = %branch);
                     Ok(false)
                 } else {
                     Err(ForgeError::CliError {
@@ -74,9 +92,10 @@ impl ForgeBackend for GitHubBackend {
     }
 
     fn check_pr_exists(&self, worktree_path: &Path, branch: &str) -> PrCheckResult {
+        let branch = normalize_branch(branch);
         debug!(
             event = "core.forge.pr_exists_check_started",
-            branch = branch
+            branch = %branch
         );
 
         if !worktree_path.exists() {
@@ -89,7 +108,7 @@ impl ForgeBackend for GitHubBackend {
 
         let output = std::process::Command::new("gh")
             .current_dir(worktree_path)
-            .args(["pr", "view", branch, "--json", "state"])
+            .args(["pr", "view", &branch, "--json", "state"])
             .output();
 
         match output {
@@ -104,7 +123,7 @@ impl ForgeBackend for GitHubBackend {
                 } else {
                     warn!(
                         event = "core.forge.pr_exists_check_error",
-                        branch = branch,
+                        branch = %branch,
                         exit_code = output.status.code(),
                         stderr = %stderr.trim(),
                         "gh CLI error - PR status unavailable"
@@ -127,10 +146,11 @@ impl ForgeBackend for GitHubBackend {
         &self,
         worktree_path: &Path,
         branch: &str,
-    ) -> Result<Option<PrInfo>, ForgeError> {
+    ) -> Result<Option<PullRequest>, ForgeError> {
+        let branch = normalize_branch(branch);
         debug!(
             event = "core.forge.pr_info_fetch_started",
-            branch = branch,
+            branch = %branch,
             worktree_path = %worktree_path.display()
         );
 
@@ -139,7 +159,7 @@ impl ForgeBackend for GitHubBackend {
             .args([
                 "pr",
                 "view",
-                branch,
+                &branch,
                 "--json",
                 "number,url,state,statusCheckRollup,reviews,isDraft",
             ])
@@ -148,7 +168,7 @@ impl ForgeBackend for GitHubBackend {
         match output {
             Ok(output) if output.status.success() => {
                 let json_str = String::from_utf8_lossy(&output.stdout);
-                Ok(parse_gh_pr_json(&json_str, branch))
+                Ok(parse_gh_pr_json(&json_str, &branch))
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -156,7 +176,7 @@ impl ForgeBackend for GitHubBackend {
                     || stderr.contains("Could not resolve")
                     || stderr.contains("no open pull requests")
                 {
-                    debug!(event = "core.forge.pr_info_fetch_no_pr", branch = branch,);
+                    debug!(event = "core.forge.pr_info_fetch_no_pr", branch = %branch);
                     Ok(None)
                 } else {
                     Err(ForgeError::CliError {
@@ -171,13 +191,58 @@ impl ForgeBackend for GitHubBackend {
             Err(e) => Err(ForgeError::from(e)),
         }
     }
+
+    fn merge_pr(
+        &self,
+        worktree_path: &Path,
+        branch: &str,
+        strategy: MergeStrategy,
+    ) -> Result<(), ForgeError> {
+        let branch = normalize_branch(branch);
+        info!(
+            event = "core.forge.merge_started",
+            branch = %branch,
+            strategy = %strategy,
+            worktree_path = %worktree_path.display()
+        );
+
+        let output = std::process::Command::new("gh")
+            .current_dir(worktree_path)
+            .args(["pr", "merge", &branch, strategy.gh_flag()])
+            .output();
+
+        match output {
+            Ok(output) if output.status.success() => {
+                info!(
+                    event = "core.forge.merge_completed",
+                    branch = %branch,
+                    strategy = %strategy
+                );
+                Ok(())
+            }
+            Ok(output) => {
+                let exit_code = output.status.code().unwrap_or(-1);
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                error!(
+                    event = "core.forge.merge_failed",
+                    branch = %branch,
+                    exit_code = exit_code,
+                    stderr = %stderr
+                );
+                Err(ForgeError::CliError {
+                    message: format!("gh pr merge failed (exit {}): {}", exit_code, stderr),
+                })
+            }
+            Err(e) => Err(ForgeError::from(e)),
+        }
+    }
 }
 
-/// Parse the JSON output from `gh pr view` into a `PrInfo`.
+/// Parse the JSON output from `gh pr view` into a `PullRequest`.
 ///
 /// Expects JSON with fields: number, url, state, isDraft, statusCheckRollup, reviews.
 /// Returns `None` if JSON is malformed or required fields are missing (logged as warnings).
-fn parse_gh_pr_json(json_str: &str, branch: &str) -> Option<PrInfo> {
+fn parse_gh_pr_json(json_str: &str, branch: &str) -> Option<PullRequest> {
     let value: serde_json::Value = match serde_json::from_str(json_str) {
         Ok(v) => v,
         Err(e) => {
@@ -232,7 +297,16 @@ fn parse_gh_pr_json(json_str: &str, branch: &str) -> Option<PrInfo> {
         "MERGED" => PrState::Merged,
         "CLOSED" => PrState::Closed,
         "OPEN" if is_draft => PrState::Draft,
-        _ => PrState::Open,
+        "OPEN" => PrState::Open,
+        unknown => {
+            warn!(
+                event = "core.forge.pr_state_unknown",
+                branch = branch,
+                state = unknown,
+                "Unknown PR state from gh CLI — treating as Open"
+            );
+            PrState::Open
+        }
     };
 
     let (ci_status, ci_summary) = parse_ci_status(&value);
@@ -249,7 +323,7 @@ fn parse_gh_pr_json(json_str: &str, branch: &str) -> Option<PrInfo> {
         review_status = %review_status
     );
 
-    Some(PrInfo {
+    Some(PullRequest {
         number,
         url,
         state,
@@ -402,6 +476,24 @@ mod tests {
         let backend = GitHubBackend;
         assert_eq!(backend.name(), "github");
         assert_eq!(backend.display_name(), "GitHub");
+    }
+
+    #[test]
+    fn test_normalize_branch_adds_prefix() {
+        let result = normalize_branch("my-feature");
+        assert_eq!(result.as_ref(), "kild/my-feature");
+    }
+
+    #[test]
+    fn test_normalize_branch_preserves_existing_prefix() {
+        let result = normalize_branch("kild/my-feature");
+        assert_eq!(result.as_ref(), "kild/my-feature");
+    }
+
+    #[test]
+    fn test_normalize_branch_nested_slashes() {
+        let result = normalize_branch("feature/auth");
+        assert_eq!(result.as_ref(), "kild/feature/auth");
     }
 
     #[test]

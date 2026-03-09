@@ -4,6 +4,7 @@ use tracing::{error, info};
 use kild_core::SessionStatus;
 use kild_core::events;
 use kild_core::session_ops;
+use kild_core::sessions::fleet;
 
 use super::helpers::{
     FailedOperation, OpenedKild, format_count, format_partial_failure_error,
@@ -17,6 +18,10 @@ pub(crate) fn handle_open_command(matches: &ArgMatches) -> Result<(), Box<dyn st
     let runtime_mode = resolve_explicit_runtime_mode(daemon_flag, no_daemon_flag);
     let resume = matches.get_flag("resume");
     let yolo = matches.get_flag("yolo");
+    let no_attach = matches.get_flag("no-attach");
+    let initial_prompt = matches.get_one::<String>("initial-prompt");
+    let rows = matches.get_one::<u16>("rows").copied();
+    let cols = matches.get_one::<u16>("cols").copied();
 
     // Check for --all flag first
     if matches.get_flag("all") {
@@ -30,7 +35,15 @@ pub(crate) fn handle_open_command(matches: &ArgMatches) -> Result<(), Box<dyn st
 
     info!(event = "cli.open_started", branch = branch, mode = ?mode);
 
-    match session_ops::open_session(branch, mode.clone(), runtime_mode, resume, yolo) {
+    let request = kild_core::sessions::types::OpenSessionRequest::new(branch, mode.clone())
+        .with_runtime_mode(runtime_mode)
+        .with_resume(resume)
+        .with_yolo(yolo)
+        .with_no_attach(no_attach)
+        .with_initial_prompt(initial_prompt.cloned())
+        .with_pty_size(rows, cols);
+
+    match session_ops::open_session(&request) {
         Ok(session) => {
             match mode {
                 kild_core::OpenMode::BareShell => {
@@ -55,6 +68,31 @@ pub(crate) fn handle_open_command(matches: &ArgMatches) -> Result<(), Box<dyn st
             if let Some(pid) = session.latest_agent().and_then(|a| a.process_id()) {
                 println!("  PID:   {}", pid);
             }
+
+            // Warn fleet claude sessions about --initial-prompt deprecation.
+            if let Some(prompt) = initial_prompt
+                && fleet::fleet_mode_active(&session.branch)
+                && fleet::is_claude_fleet_agent(&session.agent)
+            {
+                eprintln!();
+                eprintln!("Warning: --initial-prompt is unreliable for fleet sessions.");
+                eprintln!(
+                    "  Use instead: kild inject {} \"<your message>\"",
+                    session.branch
+                );
+
+                let safe_name = fleet::fleet_safe_name(&session.branch);
+                match fleet::write_to_inbox(fleet::BRAIN_BRANCH, &safe_name, prompt) {
+                    Ok(()) => {
+                        eprintln!("  → Delivered via inbox as fallback.");
+                    }
+                    Err(e) => {
+                        eprintln!("  ✗ Inbox fallback also failed: {}", e);
+                        eprintln!("  Manually run: kild inject {} \"...\"", session.branch);
+                    }
+                }
+            }
+
             info!(
                 event = "cli.open_completed",
                 branch = branch,
@@ -96,13 +134,15 @@ fn handle_open_all(
     let mut errors: Vec<FailedOperation> = Vec::new();
 
     for session in stopped {
-        match session_ops::open_session(
-            &session.branch,
+        let request = kild_core::sessions::types::OpenSessionRequest::new(
+            session.branch.to_string(),
             mode.clone(),
-            runtime_mode.clone(),
-            resume,
-            yolo,
-        ) {
+        )
+        .with_runtime_mode(runtime_mode.clone())
+        .with_resume(resume)
+        .with_yolo(yolo);
+
+        match session_ops::open_session(&request) {
             Ok(s) => {
                 info!(
                     event = "cli.open_completed",

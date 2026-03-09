@@ -32,17 +32,40 @@ pub trait TerminalBackend: Send + Sync {
         window_title: Option<&str>,
     ) -> Result<Option<String>, TerminalError>;
 
+    /// Close a terminal window by its ID (fire-and-forget).
+    ///
+    /// Called by the default `close_window` implementation after the window ID
+    /// has been validated. Backends implement this with their platform-specific
+    /// close logic (AppleScript, pkill, Hyprland IPC, etc.).
+    ///
+    /// # Arguments
+    /// * `window_id` - Opaque identifier: numeric window ID (iTerm/Terminal.app)
+    ///   or window title (Ghostty/Alacritty)
+    ///
+    /// # Behavior
+    /// - Close failures are non-fatal and logged at warn level
+    /// - Returns () because close operations should never block session destruction
+    fn close_window_by_id(&self, window_id: &str);
+
     /// Close a terminal window (fire-and-forget).
+    ///
+    /// Default implementation validates the window ID via `require_window_id`,
+    /// then delegates to `close_window_by_id`. Backends should override
+    /// `close_window_by_id` instead of this method.
     ///
     /// # Arguments
     /// * `window_id` - The window ID (for iTerm/Terminal.app) or title (for Ghostty)
     ///
     /// # Behavior
     /// - If window_id is None, skips close (logs debug message)
-    /// - If window_id is Some, attempts to close that specific window
-    /// - Close failures are non-fatal and logged at warn level
-    /// - Returns () because close operations should never block session destruction
-    fn close_window(&self, window_id: Option<&str>);
+    /// - If window_id is Some, delegates to `close_window_by_id`
+    fn close_window(&self, window_id: Option<&str>) {
+        let Some(id) = crate::terminal::common::helpers::require_window_id(window_id, self.name())
+        else {
+            return;
+        };
+        self.close_window_by_id(id);
+    }
 
     /// Focus a terminal window (bring to foreground).
     ///
@@ -109,7 +132,7 @@ mod tests {
             Ok(window_title.map(|s| s.to_string()))
         }
 
-        fn close_window(&self, _window_id: Option<&str>) {}
+        fn close_window_by_id(&self, _window_id: &str) {}
 
         fn focus_window(&self, _window_id: &str) -> Result<(), TerminalError> {
             Ok(())
@@ -121,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_backend_basic_methods() {
+    fn mock_terminal_backend_name_and_availability_are_accessible() {
         let backend = MockBackend;
         assert_eq!(backend.name(), "mock");
         assert_eq!(backend.display_name(), "Mock Terminal");
@@ -129,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_backend_execute_spawn() {
+    fn mock_terminal_backend_execute_spawn_returns_window_title() {
         let backend = MockBackend;
         let config = SpawnConfig::new(
             crate::terminal::types::TerminalType::Native,
@@ -142,9 +165,9 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_backend_close_window() {
+    fn mock_terminal_backend_close_window_does_not_panic() {
         let backend = MockBackend;
-        // close_window returns () - just verify it doesn't panic
+        // Verify fire-and-forget close does not panic
         backend.close_window(Some("123"));
     }
 }

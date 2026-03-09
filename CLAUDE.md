@@ -90,11 +90,30 @@ cargo clippy --all -- -D warnings  # Lint with warnings as errors
 cargo run -p kild -- create my-branch                  # Create kild with default agent
 cargo run -p kild -- create my-branch --note "Auth"    # Create with description
 cargo run -p kild -- create my-branch --yolo           # Create with autonomous mode
+cargo run -p kild -- create my-branch --main           # Run from project root (no worktree)
+cargo run -p kild -- create my-branch --initial-prompt "Start with auth"  # Inject prompt on startup
 cargo run -p kild -- list                              # List all kilds
 cargo run -p kild -- list --json                       # JSON output
 cargo run -p kild -- open my-branch                    # Reopen agent in existing kild
 cargo run -p kild -- open --all                        # Open all stopped kilds
 cargo run -p kild -- open my-branch --resume           # Resume previous conversation
+cargo run -p kild -- open my-branch --no-attach        # Open daemon session without attach window
+cargo run -p kild -- open my-branch --no-attach --resume  # Headless resume (brain reopening workers)
+cargo run -p kild -- open my-branch --initial-prompt "Next task: ..."  # Inject prompt on reopen
+cargo run -p kild -- inject my-branch "do the thing"  # Send to worker (inbox for claude, PTY for others)
+cargo run -p kild -- inject my-branch "msg" --inbox   # Force Claude Code inbox protocol
+cargo run -p kild -- inbox my-branch                   # Show fleet dropbox state for a session
+cargo run -p kild -- inbox my-branch --json            # JSON output
+cargo run -p kild -- inbox my-branch --task            # Show only task content
+cargo run -p kild -- inbox my-branch --report          # Show only report content
+cargo run -p kild -- inbox my-branch --status          # Show only ack status line
+cargo run -p kild -- inbox --all                       # Show all fleet sessions
+cargo run -p kild -- prime my-branch                   # Generate fleet context blob for agent bootstrapping
+cargo run -p kild -- prime my-branch --json            # JSON output
+cargo run -p kild -- prime my-branch --status          # Fleet status table only (compact)
+cargo run -p kild -- prime --all                       # Concatenated prime blobs for all fleet sessions
+cargo run -p kild -- prime --all --status              # Single deduplicated fleet table
+cargo run -p kild -- prime --all --json                # JSON array of per-session prime contexts
 cargo run -p kild -- stop my-branch                    # Stop agent, preserve kild
 cargo run -p kild -- stop --all                        # Stop all kilds
 cargo run -p kild -- stop my-branch --pane %1          # Stop a single teammate pane
@@ -110,9 +129,9 @@ cargo run -p kild -- complete my-branch                # Complete kild (PR clean
 
 **Workspace structure:**
 
-- `crates/kild-paths` - Centralized path construction for ~/.kild/ directory layout (KildPaths struct with typed methods for all paths including `tls_cert_path()` and `tls_key_path()` for daemon TLS certs). Single source of truth for KILD filesystem layout.
+- `crates/kild-paths` - Centralized path construction for ~/.kild/ directory layout (KildPaths struct with typed methods for all paths including `tls_cert_path()` and `tls_key_path()` for daemon TLS certs, and `fleet_dir()`, `fleet_project_dir()`, `fleet_dropbox_dir()` for fleet dropbox paths). Single source of truth for KILD filesystem layout.
 - `crates/kild-config` - TOML configuration types, loading, validation, and keybindings for ~/.kild/config.toml. Depends only on kild-paths and kild-protocol. Single source of truth for all KildConfig/Config/Keybindings types. Extracted from kild-core to enable fast incremental compilation of config-only changes.
-- `crates/kild-protocol` - Shared IPC protocol types (ClientMessage, DaemonMessage, SessionInfo, SessionStatus, ErrorCode), domain newtypes (SessionId, BranchName, ProjectId), and serde-only domain enums (ForgeType). Also provides `IpcConnection` for JSONL-over-Unix-socket-or-TCP/TLS client used by both kild-core and kild-tmux-shim with connection health checking via `is_alive()` and TLS variant via `connect_tls()`, and `AsyncIpcClient<R, W>` — a generic async JSONL client over any `AsyncBufRead + AsyncWrite` pair used by kild-ui. All public enums are `#[non_exhaustive]` for forward compatibility. Newtypes defined via `newtype_string!` macro for compile-time type safety. Deps: serde, serde_json, futures (tempfile, smol for tests). No tokio, no kild-core. Single source of truth for daemon wire format and IPC client.
+- `crates/kild-protocol` - Shared IPC protocol types (ClientMessage, DaemonMessage, DaemonSessionStatus, SessionStatus, ErrorCode), domain newtypes (SessionId, BranchName, ProjectId), and serde-only domain enums (ForgeType). Also provides `IpcConnection` for JSONL-over-Unix-socket-or-TCP/TLS client used by both kild-core and kild-tmux-shim with connection health checking via `is_alive()` and TLS variant via `connect_tls()`, and `AsyncIpcClient<R, W>` — a generic async JSONL client over any `AsyncBufRead + AsyncWrite` pair used by kild-ui. Also provides `pool` module with `take(socket_path)` and `release(conn)` functions — shared thread-local `IpcConnection` pool used by both kild-core and kild-tmux-shim. All public enums are `#[non_exhaustive]` for forward compatibility. Newtypes defined via `newtype_string!` macro for compile-time type safety. Deps: serde, serde_json, futures (tempfile, smol for tests). No tokio, no kild-core. Single source of truth for daemon wire format and IPC client.
 - `crates/kild-core` - Core library with all business logic, no CLI dependencies
 - `crates/kild` - Thin CLI that consumes kild-core (clap for arg parsing, color.rs for Tallinn Night palette output)
 - `crates/kild-daemon` - Standalone daemon binary for PTY management (async tokio server, JSONL IPC protocol, portable-pty integration). CLI spawns this as subprocess. Wire types re-exported from kild-protocol. Optionally binds a TLS-wrapped TCP listener (`bind_tcp`) alongside the Unix socket for remote access; self-signed cert auto-generated at `~/.kild/certs/` on first start.
@@ -124,10 +143,10 @@ cargo run -p kild -- complete my-branch                # Complete kild (PR clean
 
 **Key modules in kild-core:**
 
-- `sessions/` - Session lifecycle (create, open, stop, destroy, complete, list)
+- `sessions/` - Session lifecycle (create, open, stop, destroy, complete, list). `fleet.rs` handles Honryū fleet mode — injecting team flags and managing inbox/config for claude daemon sessions. `dropbox.rs` manages per-session fleet dropbox directories at `~/.kild/fleet/<project_id>/<branch>/` including protocol generation, env var injection, cleanup, `read_dropbox_state()` for inspecting current protocol state, and `generate_prime_context()` for building full fleet context blobs (`FleetEntry`, `PrimeContext`) consumed by `kild prime`.
 - `terminal/` - Multi-backend terminal abstraction (Ghostty, iTerm, Terminal.app, Alacritty)
 - `agents/` - Agent backend system (amp, claude, kiro, gemini, codex, opencode, resume.rs for session continuity)
-- `daemon/` - Daemon client for IPC communication with thread-local connection pooling (delegates to kild-protocol::IpcConnection) and auto-start logic (discovers kild-daemon binary as sibling executable). `tofu.rs` implements SHA-256 TOFU fingerprint verification for remote TCP/TLS connections. `mod.rs` exposes `set_remote_override()` for `--remote` CLI flag to route connections via TCP/TLS without touching handler signatures.
+- `daemon/` - Daemon client for IPC communication with auto-start logic (discovers kild-daemon binary as sibling executable). Connection pooling delegates to `kild_protocol::pool`. `tofu.rs` implements SHA-256 TOFU fingerprint verification for remote TCP/TLS connections. `mod.rs` exposes `set_remote_override()` for `--remote` CLI flag to route connections via TCP/TLS without touching handler signatures.
 - `editor/` - Editor backend system (Zed, VS Code, Vim, generic fallback) with registry.rs for detection and resolution chain (CLI > config > $VISUAL > $EDITOR > OS default via duti/xdg-mime > PATH scan)
 - `git/` - Git worktree operations via git2
 - `forge/` - Forge backend system (GitHub, future: GitLab, Bitbucket, Gitea) for PR operations
@@ -180,7 +199,7 @@ cargo run -p kild -- complete my-branch                # Complete kild (PR clean
 - `parser/` - Hand-rolled tmux argument parser for ~15 subcommands + aliases (parse.rs, types.rs, tests.rs)
 - `commands.rs` - Command handlers dispatching to daemon IPC or local state
 - `state.rs` - File-based pane registry with flock concurrency control
-- `ipc.rs` - Domain-specific IPC helpers with thread-local connection pooling (delegates to kild-protocol::IpcConnection)
+- `ipc.rs` - Domain-specific IPC helpers; connection pooling delegates to `kild_protocol::pool`
 - `main.rs` - Entry point, file-based logging controlled by KILD_SHIM_LOG env var
 - `errors.rs` - ShimError type
 
@@ -197,7 +216,7 @@ cargo run -p kild -- complete my-branch                # Complete kild (PR clean
 **Key modules in kild (CLI):**
 
 - `app/` - CLI command implementations (daemon.rs, git.rs, global.rs, misc.rs, project.rs, query.rs, session.rs, tests.rs). `global.rs` parses `--remote`/`--remote-fingerprint` flags and calls `set_remote_override()` to route all IPC over TCP/TLS for that invocation.
-- `commands/` - Individual command handler modules (teammates.rs, stop.rs, attach.rs, and others)
+- `commands/` - Individual command handler modules (teammates.rs, stop.rs, attach.rs, inject.rs, inbox.rs, prime.rs, and others)
 - `main.rs` - CLI entry point with clap argument parsing
 - `color.rs` - Tallinn Night palette output formatting
 
@@ -207,7 +226,7 @@ cargo run -p kild -- complete my-branch                # Complete kild (PR clean
 - `commands/` - Command implementations (assert.rs, diff.rs, elements.rs, interact.rs, list.rs, screenshot.rs, window_resolution.rs)
 - `main.rs` - CLI entry point
 
-**Module pattern:** Each domain in kild-core starts with `errors.rs`, `types/`, `mod.rs`. Core types and submodules may be organized as directories (e.g., `sessions/types/` contains agent_process.rs, request.rs, safety.rs, session.rs, status.rs, tests.rs; `sessions/persistence/` contains patching.rs, session_files.rs, sidecar.rs, tests.rs). Additional files vary by domain (e.g., `create.rs`/`open.rs`/`stop.rs`/`list.rs`/`destroy.rs`/`complete.rs`/`agent_status.rs`/`daemon_helpers.rs` for sessions with `handler.rs` as re-export facade). kild-daemon uses a flatter structure with top-level errors/types and module-specific implementation files. kild-tmux-shim, kild (CLI), and kild-peek (CLI) use focused modules organized by domain (parser/, app/, commands/).
+**Module pattern:** Each domain in kild-core starts with `errors.rs`, `types/`, `mod.rs`. Core types and submodules may be organized as directories (e.g., `sessions/types/` contains agent_process.rs, request.rs, safety.rs, session.rs, status.rs, tests.rs; `sessions/persistence/` contains patching.rs, session_files.rs, sidecar.rs, tests.rs; `sessions/integrations/` contains claude.rs, codex.rs, opencode.rs, mod.rs for agent hook + settings integration). Additional files vary by domain (e.g., `create.rs`/`open.rs`/`stop.rs`/`list.rs`/`destroy.rs`/`complete.rs`/`agent_status.rs`/`shim_setup.rs`/`attach.rs`/`daemon_request.rs` for sessions with `handler.rs` as re-export facade). kild-daemon uses a flatter structure with top-level errors/types and module-specific implementation files. kild-tmux-shim, kild (CLI), and kild-peek (CLI) use focused modules organized by domain (parser/, app/, commands/).
 
 **CLI interaction:** Commands delegate directly to `kild-core` handlers. No business logic in CLI layer.
 
@@ -276,13 +295,15 @@ info!(event = "core.git.worktree.create_completed", path = %worktree_path.displa
 ```rust
 pub trait TerminalBackend: Send + Sync {
     fn name(&self) -> &'static str;
+    fn display_name(&self) -> &'static str;
     fn is_available(&self) -> bool;
     fn execute_spawn(&self, config: &SpawnConfig, window_title: Option<&str>)
         -> Result<Option<String>, TerminalError>;
-    fn focus_window(&self, window_id: Option<&str>) -> Result<(), TerminalError>;
+    fn close_window_by_id(&self, window_id: &str);
+    fn focus_window(&self, window_id: &str) -> Result<(), TerminalError>;
     fn hide_window(&self, window_id: &str) -> Result<(), TerminalError>;
-    fn close_window(&self, window_id: Option<&str>);
-    fn is_window_open(&self, window_id: &str) -> Result<Option<bool>, TerminalError>;
+    fn close_window(&self, window_id: Option<&str>) { /* default: require_window_id + delegate */ }
+    fn is_window_open(&self, window_id: &str) -> Result<Option<bool>, TerminalError> { /* default: Ok(None) */ }
 }
 ```
 
@@ -306,7 +327,9 @@ Status detection uses PID tracking by default. Ghostty uses window-based detecti
 5. Shim creates new daemon PTYs for teammates via IPC, manages pane state locally in `~/.kild/shim/<session>/`
 6. `kild destroy` automatically cleans up all child shim PTYs
 
-**Supported tmux commands:** `split-window` (creates daemon PTYs), `send-keys` (writes to PTY stdin with key name translation), `kill-pane` (destroys PTYs), `display-message` (expands format strings), `list-panes`, `select-pane`, `set-option`, `select-layout` (no-op), `resize-pane` (no-op), `has-session`, `new-session`, `new-window`, `list-windows`, `break-pane`, `join-pane`, `capture-pane` (reads PTY scrollback with `-p` for print, `-S` for start line).
+**Supported tmux commands:** `split-window` (creates daemon PTYs; supports shell-command after `--` or as trailing positional args — when provided, the command runs directly in the PTY and `#{pane_dead}` becomes `1` on exit), `send-keys` (writes to PTY stdin with key name translation), `kill-pane` (destroys PTYs), `display-message` (expands format strings), `list-panes`, `select-pane`, `set-option`, `select-layout` (no-op), `resize-pane` (no-op), `has-session`, `new-session`, `new-window`, `list-windows`, `break-pane`, `join-pane`, `capture-pane` (reads PTY scrollback with `-p` for print, `-S` for start line).
+
+**Format variables:** `#{pane_id}`, `#{session_name}`, `#{window_index}`, `#{window_name}`, `#{pane_title}`, `#{pane_dead}` (queries daemon — `1` if process exited, `0` if running), `#{pane_pid}` (queries daemon — PID of pane process), `#{pane_dead_status}` (queries daemon — exit code of dead pane).
 
 **State management:** File-based pane registry at `~/.kild/shim/<session_id>/panes.json` with flock-based concurrency control. Each pane maps to a daemon session ID.
 
@@ -320,15 +343,15 @@ Status detection uses PID tracking by default. Ghostty uses window-based detecti
 
 **Integration points in kild-core:**
 
-- `daemon_helpers.rs:ensure_shim_binary()` - Symlinks shim as `~/.kild/bin/tmux` (best-effort, warns on failure)
-- `daemon_helpers.rs:ensure_codex_notify_hook()` - Installs `~/.kild/hooks/codex-notify` for Codex CLI integration (idempotent, best-effort)
-- `daemon_helpers.rs:ensure_codex_config()` - Patches `~/.codex/config.toml` with notify hook (respects existing config, best-effort)
-- `daemon_helpers.rs:ensure_claude_status_hook()` - Installs `~/.kild/hooks/claude-status` for Claude Code integration (idempotent, best-effort)
-- `daemon_helpers.rs:ensure_claude_settings()` - Patches `~/.claude/settings.json` with hook entries (respects existing config, best-effort)
-- `daemon_helpers.rs:build_daemon_create_request()` - Injects shim, Codex, and Claude Code env vars into daemon PTY requests
-- `create.rs:create_session()` - Initializes shim state directory, `panes.json`, and agent-specific hooks for daemon sessions
-- `open.rs:open_session()` - Ensures agent-specific hooks when opening sessions
-- `destroy.rs:destroy_session()` - Destroys child shim PTYs and UI-created daemon sessions via daemon IPC, removes `~/.kild/shim/<session>/`, and cleans up task lists at `~/.claude/tasks/<task_list_id>/`
+- `shim_setup.rs:ensure_shim_binary()` - Symlinks shim as `~/.kild/bin/tmux` (best-effort, warns on failure)
+- `integrations/codex.rs:ensure_codex_notify_hook()` - Installs `~/.kild/hooks/codex-notify` for Codex CLI integration (idempotent, best-effort)
+- `integrations/codex.rs:ensure_codex_config()` - Patches `~/.codex/config.toml` with notify hook (respects existing config, best-effort)
+- `integrations/claude.rs:ensure_claude_status_hook()` - Installs `~/.kild/hooks/claude-status` for Claude Code integration (idempotent, best-effort)
+- `integrations/claude.rs:ensure_claude_settings()` - Patches `~/.claude/settings.json` with hook entries (respects existing config, best-effort)
+- `daemon_request.rs:build_daemon_create_request()` - Injects shim, Codex, Claude Code env vars, and fleet agent flags into daemon PTY requests
+- `create.rs:create_session()` - Initializes shim state directory, `panes.json`, agent-specific hooks, fleet membership, and dropbox directory for daemon sessions
+- `open.rs:open_session()` - Ensures agent-specific hooks, fleet membership, and dropbox directory when opening sessions
+- `destroy.rs:destroy_session()` - Destroys child shim PTYs and UI-created daemon sessions via daemon IPC, removes `~/.kild/shim/<session>/`, cleans up task lists at `~/.claude/tasks/<task_list_id>/`, and removes fleet dropbox at `~/.kild/fleet/<project_id>/<branch>/`
 
 ## Agent Hook Integration
 
@@ -343,6 +366,7 @@ Status detection uses PID tracking by default. Ghostty uses window-based detecti
 3. Claude Code calls the hook with JSON events on stdin
 4. Hook maps events to KILD statuses: Stop/SubagentStop/TeammateIdle/TaskCompleted → idle, Notification(permission_prompt) → waiting, Notification(idle_prompt) → idle
 5. Hook calls `kild agent-status --self <status> --notify` to update session state and send desktop notifications
+6. On Stop/idle events, hook also calls `kild inject honryu "[EVENT] <branch> <event>: <last_message>"` to forward worker state to the brain session (skipped if the session IS honryu, preventing self-loops; also skipped if honryu is not running)
 
 **Hook script:** `~/.kild/hooks/claude-status` (shell script, auto-generated, do not edit)
 
@@ -386,6 +410,46 @@ Status detection uses PID tracking by default. Ghostty uses window-based detecti
 
 - `$KILD_SESSION_BRANCH` - Injected into Codex sessions as fallback for `--self` PWD-based detection
 
+### Fleet Mode (Honryū)
+
+**Purpose:** Auto-wires Claude Code agent team flags into daemon sessions so `kild inject` can deliver messages via the Claude Code inbox polling protocol.
+
+**How it works:**
+
+- Fleet mode activates when `~/.claude/teams/honryu/` exists or when creating the `honryu` (brain) session itself
+- Daemon sessions with the `claude` agent get `--agent-id <safe>@honryu --agent-name <safe> --team-name honryu` appended to the agent command, where `<safe>` is `fleet_safe_name(branch)` (slashes replaced with dashes, e.g. `refactor/foo` → `refactor-foo`)
+- The brain session (`honryu` branch) additionally loads `--agent kild-brain` as team lead
+- `kild inject <branch> "<text>"` routes via PTY stdin for non-claude agents; for claude sessions it writes to `~/.claude/teams/honryu/inboxes/<safe>.json` where `<safe> = fleet_safe_name(branch)` (Claude Code delivers it as a new user turn within ~1s). Use `--inbox` to force the inbox path.
+- `ensure_fleet_member()` in `fleet.rs` creates the inbox file and team config on every create/open (idempotent, best-effort)
+- `ensure_dropbox()` in `dropbox.rs` creates `~/.kild/fleet/<project_id>/<branch>/` with a `protocol.md` on every create/open (idempotent, best-effort). Directory is removed on destroy.
+- Bare shell sessions are unaffected — they have no agent to consume tasks. Non-claude agents participate in the dropbox protocol but do not receive Claude Code inbox/team flags.
+
+**Environment variables injected into fleet daemon sessions:**
+
+- `$KILD_DROPBOX` - Path to the session's dropbox directory (`~/.kild/fleet/<project_id>/<branch>/`)
+- `$KILD_FLEET_DIR` - Path to the project fleet directory (`~/.kild/fleet/<project_id>/`). Brain session only.
+
+**Dropbox file protocol** (used by workers to communicate with the brain):
+
+- `task-id` - Monotonically incrementing task counter (written by brain)
+- `task.md` - Current task (written by brain)
+- `ack` - Task acknowledgment: worker writes the task-id after reading task.md
+- `report.md` - Task result (written by worker on completion)
+- `history.jsonl` - Append-only audit trail of all injections (written by KILD)
+- `protocol.md` - Protocol instructions (auto-generated by KILD, do not edit)
+
+Inspect dropbox state with `kild inbox <branch>` (or `--all` for all fleet sessions). Generate a full fleet context blob for agent bootstrapping with `kild prime <branch>` — outputs protocol, current task, and fleet status as a composable markdown blob suitable for `kild inject worker "$(kild prime worker)"`. Use `kild prime --all` to get concatenated blobs for all fleet sessions, `--all --status` for a single deduplicated fleet table, or `--all --json` for a JSON array.
+
+**Key files:** `crates/kild-core/src/sessions/fleet.rs`, `crates/kild-core/src/sessions/dropbox.rs`, `crates/kild/src/commands/inject.rs`, `crates/kild/src/commands/inbox.rs`, `crates/kild/src/commands/prime.rs`
+
+**Typical brain setup:**
+
+```
+kild create honryu --daemon --main   # brain: runs from project root, no worktree
+kild create <worker> --daemon        # worker: auto-joins fleet with team flags
+kild inject <worker> "do the thing"  # brain → worker message
+```
+
 ## Forge Backend Pattern
 
 ```rust
@@ -395,7 +459,7 @@ pub trait ForgeBackend: Send + Sync {
     fn is_available(&self) -> bool;
     fn is_pr_merged(&self, worktree_path: &Path, branch: &str) -> bool;
     fn check_pr_exists(&self, worktree_path: &Path, branch: &str) -> PrCheckResult;
-    fn fetch_pr_info(&self, worktree_path: &Path, branch: &str) -> Option<PrInfo>;
+    fn fetch_pr_info(&self, worktree_path: &Path, branch: &str) -> Option<PullRequest>;
 }
 ```
 
@@ -404,7 +468,7 @@ Backends registered in `forge/registry.rs`. Forge detection via `detect_forge()`
 - GitHub (via `gh` CLI)
 - Future: GitLab, Bitbucket, Gitea
 
-Override auto-detection with `[git] forge = "github"` in config. PR types (PrInfo, PrState, CiStatus, ReviewStatus) defined in `forge/types.rs`.
+Override auto-detection with `[git] forge = "github"` in config. PR types (PullRequest, PrState, CiStatus, ReviewStatus) defined in `forge/types.rs`.
 
 ## Configuration Hierarchy
 

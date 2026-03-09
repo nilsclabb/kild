@@ -30,16 +30,20 @@ pub mod sessions;
 pub mod state;
 pub mod terminal;
 
-// Re-export newtypes from kild-protocol
-pub use kild_protocol::{BranchName, ProjectId, SessionId};
+// Re-export newtypes and shared domain enums from kild-protocol
+pub use kild_protocol::{
+    AgentMode, AgentStatus, BranchName, OpenMode, ProjectId, RuntimeMode, SessionId,
+};
 
 // Re-export config types from kild-config
 pub use editor::{EditorBackend, EditorError, EditorType};
-pub use forge::types::{CiStatus, PrCheckResult, PrInfo, PrState, ReviewStatus};
+pub use forge::types::{
+    CiStatus, MergeReadiness, MergeStrategy, PrCheckResult, PrState, PullRequest, ReviewStatus,
+};
 pub use forge::{ForgeBackend, ForgeError, ForgeType};
 pub use git::types::{
     BaseBranchDrift, BranchHealth, CleanKild, CommitActivity, ConflictStatus, DiffStats,
-    FileOverlap, GitStats, MergeReadiness, OverlapReport, UncommittedDetails, WorktreeStatus,
+    FileOverlap, GitStats, OverlapReport, UncommittedDetails, WorktreeStatus,
 };
 pub use kild_config::ConfigError;
 pub use kild_config::{
@@ -49,14 +53,12 @@ pub use kild_config::{
 pub use kild_config::{CopyOptions, IncludeConfig, PatternRule};
 pub use projects::{Project, ProjectError, ProjectManager, ProjectsData};
 pub use sessions::agent_status::AgentStatusResult;
-pub use sessions::info::SessionInfo;
+pub use sessions::info::SessionSnapshot;
 pub use sessions::types::{
-    AgentProcess, AgentStatus, AgentStatusInfo, CompleteResult, CreateSessionRequest,
-    DestroySafetyInfo, GitStatus, ProcessStatus, Session, SessionStatus,
+    AgentProcess, AgentStatusRecord, CompleteRequest, CompleteResult, CreateSessionRequest,
+    DestroySafety, GitStatus, ProcessStatus, Session, SessionStatus,
 };
-pub use state::{
-    AgentMode, Command, CoreStore, DispatchError, Event, OpenMode, RuntimeMode, Store,
-};
+pub use state::{Command, CoreStore, DispatchError, Event, Store};
 
 // Re-export handler modules as the primary API
 pub use cleanup::handler as cleanup_ops;
